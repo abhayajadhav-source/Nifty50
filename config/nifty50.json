@@ -1,0 +1,9 @@
+{
+  "symbols": [
+    {"yahoo": "RELIANCE.NS", "finnhub": "RELIANCE.NS", "name": "Reliance"},
+    {"yahoo": "TCS.NS", "finnhub": "TCS.NS", "name": "TCS"},
+    {"yahoo": "HDFCBANK.NS", "finnhub": "HDFCBANK.NS", "name": "HDFC Bank"},
+    {"yahoo": "INFY.NS", "finnhub": "INFY.NS", "name": "Infosys"},
+    {"yahoo": "ICICIBANK.NS", "finnhub": "ICICIBANK.NS", "name": "ICICI Bank"}
+  ]
+}
