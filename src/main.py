@@ -75,9 +75,12 @@ def main():
             llm_result = analyze_with_claude(claude_key, signal.__dict__, news)
             print(f"  {sym['name']}: Claude says {llm_result['verdict']}")
             
-            if llm_result["verdict"] in ("TAKE_TRADE", "WAIT"):
-                send_alert(tg_token, tg_chat, signal, llm_result)
-                alerted.add(sym["name"])
+           if llm_result["verdict"] in ("TAKE_TRADE", "WAIT"):
+              success = send_alert(tg_token, tg_chat, signal, llm_result)
+              if success:
+                 alerted.add(sym["name"])
+              else:
+                 print(f"  {sym['name']}: alert failed, will retry next run")
             
             time.sleep(1)
         except Exception as e:
