@@ -9,6 +9,10 @@ on:
         description: 'Run with synthetic data?'
         type: boolean
         default: false
+      manual_report:
+        description: 'Generate downloadable analyst report?'
+        type: boolean
+        default: true
 
 jobs:
   monitor:
@@ -24,8 +28,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: alerted_today.json
-          key: alert-state-v7-${{ github.run_id }}
-          restore-keys: alert-state-v7-
+          key: alert-state-v8-${{ github.run_id }}
+          restore-keys: alert-state-v8-
       
       - name: Install dependencies
         run: pip install -r requirements.txt
@@ -36,4 +40,13 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           UPSTOX_ACCESS_TOKEN: ${{ secrets.UPSTOX_ACCESS_TOKEN }}
           MOCK_MODE: ${{ github.event.inputs.mock_mode || 'false' }}
+          MANUAL_RUN: ${{ github.event.inputs.manual_report || 'false' }}
         run: python src/main.py
+      
+      - name: Upload report
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.manual_report == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-report
+          path: scan_report.md
+          retention-days: 7
