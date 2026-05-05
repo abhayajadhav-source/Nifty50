@@ -41,14 +41,14 @@ def main():
 
     state_file = "alerted_today.json"
     today = datetime.now(IST).strftime("%Y-%m-%d")
-    
+
     gap_alerted = set()
     breakout_alerted = set()
     gapfill_alerted = set()
     orb_alerted = set()
-    or_levels = {}      # {stock_name: {"high": x, "low": y}}
-    atr_cache = {}      # {stock_name: atr_value}  — cached for the day
-    
+    or_levels = {}
+    atr_cache = {}
+
     if os.path.exists(state_file):
         try:
             with open(state_file) as f:
@@ -63,9 +63,9 @@ def main():
         except Exception:
             pass
 
-    print(f"Scanning {len(symbols)} stocks (mock={MOCK_MODE})...")
     in_or = is_in_or_window()
     after_or = is_after_or_window()
+    print(f"Scanning {len(symbols)} stocks (mock={MOCK_MODE}) | in_or_window={in_or} | after_or_window={after_or}")
 
     for sym in symbols:
         try:
@@ -74,29 +74,30 @@ def main():
                 candles = get_mock_candles(sym["name"])
             else:
                 q = get_upstox_quote(sym["upstox"], upstox_token)
-            
+
             # Compute or fetch ATR (cache once per day per stock)
             if sym["name"] not in atr_cache:
                 if MOCK_MODE:
-                    atr = calculate_atr(candles)
+                    atr_value = calculate_atr(candles)
                 else:
                     try:
                         candles = get_upstox_daily_candles(sym["upstox"], upstox_token, days=20)
-                        atr = calculate_atr(candles)
+                        atr_value = calculate_atr(candles)
                     except Exception as e:
                         print(f"  {sym['name']}: ATR fetch failed - {e}")
-                        atr = None
-                if atr:
-                    atr_cache[sym["name"]] = atr
+                        atr_value = None
+                if atr_value:
+                    atr_cache[sym["name"]] = atr_value
             atr = atr_cache.get(sym["name"])
-            
-            # Track Opening Range during 9:15-9:30
+
+            # Track Opening Range during 9:15-9:30 IST
             if in_or:
                 cur = or_levels.get(sym["name"], {})
                 cur_high = max(cur.get("high", 0), q["high"])
-                cur_low = min(cur.get("low", float("inf")), q["low"]) if cur.get("low") else q["low"]
+                existing_low = cur.get("low")
+                cur_low = min(existing_low, q["low"]) if existing_low else q["low"]
                 or_levels[sym["name"]] = {"high": cur_high, "low": cur_low}
-            
+
             # ===== Strategy 1: Gap & Retracement =====
             if sym["name"] not in gap_alerted:
                 signal = analyze_gap(
@@ -109,7 +110,7 @@ def main():
                     print(f"  {sym['name']}: GAP setup")
                     if send_alert(tg_token, tg_chat, signal):
                         gap_alerted.add(sym["name"])
-            
+
             # ===== Strategy 2: 52-Week Breakout =====
             if sym["name"] not in breakout_alerted:
                 bsignal = analyze_breakout(
@@ -122,7 +123,7 @@ def main():
                     print(f"  {sym['name']}: BREAKOUT {bsignal.breakout_type.value}")
                     if send_breakout_alert(tg_token, tg_chat, bsignal):
                         breakout_alerted.add(sym["name"])
-            
+
             # ===== Strategy 3: Gap Fill Rejection =====
             if sym["name"] not in gapfill_alerted and atr:
                 gfsignal = analyze_gap_fill(
@@ -136,7 +137,7 @@ def main():
                     print(f"  {sym['name']}: GAP FILL REJECTION {gfsignal.direction}")
                     if send_gap_fill_alert(tg_token, tg_chat, gfsignal):
                         gapfill_alerted.add(sym["name"])
-            
+
             # ===== Strategy 4: Opening Range Breakout =====
             if sym["name"] not in orb_alerted and atr and after_or:
                 or_data = or_levels.get(sym["name"], {})
@@ -152,11 +153,16 @@ def main():
                         print(f"  {sym['name']}: ORB {osignal.direction}")
                         if send_orb_alert(tg_token, tg_chat, osignal):
                             orb_alerted.add(sym["name"])
-            
+
+            # Per-stock status line — confirms the stock was processed
+            gap_pct = ((q["open"] - q["prev_close"]) / q["prev_close"] * 100) if q["prev_close"] else 0
+            atr_str = f"₹{atr}" if atr else "n/a"
+            print(f"  {sym['name']}: scanned (gap={gap_pct:.2f}%, ltp=₹{q['ltp']}, atr={atr_str})")
+
             time.sleep(0.4)
         except Exception as e:
             print(f"  {sym['name']}: ERROR - {e}")
-    
+
     with open(state_file, "w") as f:
         json.dump({
             "date": today,
@@ -167,7 +173,7 @@ def main():
             "or_levels": or_levels,
             "atr_cache": atr_cache,
         }, f)
-    
+
     print("Done.")
 
 
