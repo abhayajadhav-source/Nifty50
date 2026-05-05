@@ -2,7 +2,7 @@ import requests
 
 
 def send_alert(bot_token, chat_id, signal):
-    """Gap-retracement alert."""
+    """Gap-retracement alert (Strategy 1)."""
     emoji = "🟢" if signal.gap_type.value == "GAP_UP" else "🔴"
     direction = "BUY" if signal.gap_type.value == "GAP_UP" else "SELL"
     
@@ -25,7 +25,7 @@ Place trade manually."""
 
 
 def send_breakout_alert(bot_token, chat_id, signal):
-    """52-week high/low breakout alert."""
+    """52-week high/low breakout alert (Strategy 2)."""
     is_high = signal.breakout_type.value == "52W_HIGH_BREAKOUT"
     emoji = "🚀" if is_high else "🔻"
     label = "52-Week HIGH BREAKOUT" if is_high else "52-Week LOW BREAKDOWN"
@@ -39,19 +39,17 @@ def send_breakout_alert(bot_token, chat_id, signal):
     msg = f"""{emoji} {signal.name} — {label}
 
 📊 Breakout Info
-Current Price: ₹{signal.current_price}
+Current: ₹{signal.current_price}
 52W Level: ₹{signal.week52_level}
 {distance_text}
 
 📈 Day's Change
-Prev Close: ₹{signal.prev_close}
-Day Change: {signal.day_change_pct}%
+Prev Close: ₹{signal.prev_close} | Day Change: {signal.day_change_pct}%
 
 💡 {direction_hint}
-This is a momentum signal, not a complete trade plan.
+Momentum signal. Use your own SL/target.
 
-⚠️ Verify live price in Upstox before placing.
-Place trade manually."""
+⚠️ Verify live price in Upstox before placing."""
     
     return _send(bot_token, chat_id, msg, signal.name)
 
@@ -78,10 +76,9 @@ Entry: ₹{signal.suggested_entry}
 Stop Loss: ₹{signal.suggested_stop_loss} (-0.30%)
 Target: ₹{signal.suggested_target}
 
-⏱️ Hold: 30-90 min (mean reversion play)
+⏱️ Hold: 30-90 min (mean reversion)
 
-⚠️ Verify live price in Upstox before placing.
-Place trade manually."""
+⚠️ Verify live price in Upstox before placing."""
     
     return _send(bot_token, chat_id, msg, signal.name)
 
@@ -93,8 +90,7 @@ def send_orb_alert(bot_token, chat_id, signal):
     msg = f"""{emoji} {signal.name} — {signal.direction} setup (Opening Range Breakout)
 
 📊 Opening Range (9:15-9:30)
-OR High: ₹{signal.or_high}
-OR Low: ₹{signal.or_low}
+OR High: ₹{signal.or_high} | OR Low: ₹{signal.or_low}
 OR Width: ₹{signal.or_width} ({signal.or_width_atr_multiple}× ATR)
 ATR (14d): ₹{signal.atr}
 
@@ -109,8 +105,63 @@ Target: ₹{signal.suggested_target} (measured move)
 
 ⏱️ Hold: 1-4 hours
 
-⚠️ Verify live price in Upstox before placing.
-Place trade manually."""
+⚠️ Verify live price in Upstox before placing."""
+    
+    return _send(bot_token, chat_id, msg, signal.name)
+
+
+def send_ma_trend_alert(bot_token, chat_id, signal):
+    """MA Trend Following alert (Strategy 5)."""
+    emoji = "📈" if signal.direction == "BUY" else "📉"
+    
+    msg = f"""{emoji} {signal.name} — {signal.direction} setup (MA Trend Following)
+
+📊 Trend Confirmation (30-min EMAs)
+EMA-9 (Fast): ₹{signal.ema_fast}
+EMA-21 (Slow): ₹{signal.ema_slow}
+Current: ₹{signal.current_price}
+Distance from EMA-9: {signal.distance_from_fast_pct}%
+
+✓ Price near fast EMA (pullback in sustained trend)
+
+🎯 Trade Plan
+Entry: ₹{signal.suggested_entry}
+Stop Loss: ₹{signal.suggested_stop_loss} (-0.30%)
+Target: ₹{signal.suggested_target} (2× risk)
+
+⏱️ Hold: 2-5 hours
+
+⚠️ Verify live price in Upstox before placing."""
+    
+    return _send(bot_token, chat_id, msg, signal.name)
+
+
+def send_cprbo_alert(bot_token, chat_id, signal):
+    """CPRBO alert (Strategy 6)."""
+    emoji = "🎯" if signal.direction == "BUY" else "🎯"
+    
+    msg = f"""{emoji} {signal.name} — {signal.direction} setup (CPR Late Breakout)
+
+📊 CPR Levels (yesterday)
+Pivot: ₹{signal.pivot}
+TC (Top): ₹{signal.tc}
+BC (Bottom): ₹{signal.bc}
+CPR Width: {signal.cpr_width_pct}% (narrow = trend potential)
+
+📈 Today's Range
+Morning High: ₹{signal.morning_high}
+Morning Low: ₹{signal.morning_low}
+Current: ₹{signal.current_price}
+Broke {'above' if signal.direction == 'BUY' else 'below'}: ₹{signal.breakout_level}
+
+🎯 Trade Plan
+Entry: ₹{signal.suggested_entry}
+Stop Loss: ₹{signal.suggested_stop_loss} (-0.30%)
+Target: ₹{signal.suggested_target} (measured move)
+
+⏱️ Hold: 1-3 hours
+
+⚠️ Verify live price in Upstox before placing."""
     
     return _send(bot_token, chat_id, msg, signal.name)
 
