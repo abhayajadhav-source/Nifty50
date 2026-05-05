@@ -5,8 +5,11 @@ import pytz
 sys.path.insert(0, os.path.dirname(__file__))
 from gap_detector import analyze_gap
 from breakout_detector import analyze_breakout
-from quote_fetcher import get_upstox_quote, get_mock_quote
-from telegram_notifier import send_alert, send_breakout_alert
+from gap_fill_detector import analyze_gap_fill
+from orb_detector import analyze_orb, is_in_or_window, is_after_or_window
+from atr_calculator import calculate_atr
+from quote_fetcher import get_upstox_quote, get_upstox_daily_candles, get_mock_quote, get_mock_candles
+from telegram_notifier import send_alert, send_breakout_alert, send_gap_fill_alert, send_orb_alert
 
 IST = pytz.timezone("Asia/Kolkata")
 MOCK_MODE = os.getenv("MOCK_MODE", "false").lower() == "true"
@@ -30,7 +33,7 @@ def main():
     upstox_token = os.environ.get("UPSTOX_ACCESS_TOKEN", "")
 
     if not MOCK_MODE and not upstox_token:
-        print("ERROR: UPSTOX_ACCESS_TOKEN missing from secrets")
+        print("ERROR: UPSTOX_ACCESS_TOKEN missing")
         return
 
     with open("config/nifty50.json") as f:
@@ -39,9 +42,12 @@ def main():
     state_file = "alerted_today.json"
     today = datetime.now(IST).strftime("%Y-%m-%d")
     
-    # Two separate de-dup sets: gap alerts and breakout alerts
     gap_alerted = set()
     breakout_alerted = set()
+    gapfill_alerted = set()
+    orb_alerted = set()
+    or_levels = {}      # {stock_name: {"high": x, "low": y}}
+    atr_cache = {}      # {stock_name: atr_value}  — cached for the day
     
     if os.path.exists(state_file):
         try:
@@ -50,19 +56,48 @@ def main():
                 if data.get("date") == today:
                     gap_alerted = set(data.get("gap_alerted", []))
                     breakout_alerted = set(data.get("breakout_alerted", []))
+                    gapfill_alerted = set(data.get("gapfill_alerted", []))
+                    orb_alerted = set(data.get("orb_alerted", []))
+                    or_levels = data.get("or_levels", {})
+                    atr_cache = data.get("atr_cache", {})
         except Exception:
             pass
 
     print(f"Scanning {len(symbols)} stocks (mock={MOCK_MODE})...")
+    in_or = is_in_or_window()
+    after_or = is_after_or_window()
 
     for sym in symbols:
         try:
             if MOCK_MODE:
                 q = get_mock_quote(sym["name"])
+                candles = get_mock_candles(sym["name"])
             else:
                 q = get_upstox_quote(sym["upstox"], upstox_token)
-
-            # ===== Strategy 1: Gap and Retracement =====
+            
+            # Compute or fetch ATR (cache once per day per stock)
+            if sym["name"] not in atr_cache:
+                if MOCK_MODE:
+                    atr = calculate_atr(candles)
+                else:
+                    try:
+                        candles = get_upstox_daily_candles(sym["upstox"], upstox_token, days=20)
+                        atr = calculate_atr(candles)
+                    except Exception as e:
+                        print(f"  {sym['name']}: ATR fetch failed - {e}")
+                        atr = None
+                if atr:
+                    atr_cache[sym["name"]] = atr
+            atr = atr_cache.get(sym["name"])
+            
+            # Track Opening Range during 9:15-9:30
+            if in_or:
+                cur = or_levels.get(sym["name"], {})
+                cur_high = max(cur.get("high", 0), q["high"])
+                cur_low = min(cur.get("low", float("inf")), q["low"]) if cur.get("low") else q["low"]
+                or_levels[sym["name"]] = {"high": cur_high, "low": cur_low}
+            
+            # ===== Strategy 1: Gap & Retracement =====
             if sym["name"] not in gap_alerted:
                 signal = analyze_gap(
                     symbol=sym["upstox"], name=sym["name"],
@@ -71,42 +106,68 @@ def main():
                     low_since_open=q["low"], high_since_open=q["high"],
                 )
                 if signal and signal.in_entry_zone and signal.holding_above_floor:
-                    print(f"  {sym['name']}: GAP SETUP — sending alert")
+                    print(f"  {sym['name']}: GAP setup")
                     if send_alert(tg_token, tg_chat, signal):
                         gap_alerted.add(sym["name"])
-                elif signal:
-                    if not signal.in_entry_zone:
-                        print(f"  {sym['name']}: gap {signal.gap_pct}% retrace {signal.retracement_pct}% not in zone")
-                    elif not signal.holding_above_floor:
-                        print(f"  {sym['name']}: broke floor")
-                else:
-                    gap_pct = ((q["open"] - q["prev_close"]) / q["prev_close"] * 100) if q["prev_close"] else 0
-                    print(f"  {sym['name']}: no qualifying gap (gap={gap_pct:.2f}%)")
             
             # ===== Strategy 2: 52-Week Breakout =====
             if sym["name"] not in breakout_alerted:
-                breakout_signal = analyze_breakout(
+                bsignal = analyze_breakout(
                     symbol=sym["upstox"], name=sym["name"],
                     current_price=q["ltp"], prev_close=q["prev_close"],
                     week52_high=q.get("week52_high", 0),
                     week52_low=q.get("week52_low", 0),
                 )
-                if breakout_signal:
-                    print(f"  {sym['name']}: BREAKOUT {breakout_signal.breakout_type.value} — sending alert")
-                    if send_breakout_alert(tg_token, tg_chat, breakout_signal):
+                if bsignal:
+                    print(f"  {sym['name']}: BREAKOUT {bsignal.breakout_type.value}")
+                    if send_breakout_alert(tg_token, tg_chat, bsignal):
                         breakout_alerted.add(sym["name"])
             
-            time.sleep(0.3)
+            # ===== Strategy 3: Gap Fill Rejection =====
+            if sym["name"] not in gapfill_alerted and atr:
+                gfsignal = analyze_gap_fill(
+                    symbol=sym["upstox"], name=sym["name"],
+                    prev_close=q["prev_close"], open_price=q["open"],
+                    current_price=q["ltp"],
+                    today_low=q["low"], today_high=q["high"],
+                    atr=atr,
+                )
+                if gfsignal:
+                    print(f"  {sym['name']}: GAP FILL REJECTION {gfsignal.direction}")
+                    if send_gap_fill_alert(tg_token, tg_chat, gfsignal):
+                        gapfill_alerted.add(sym["name"])
+            
+            # ===== Strategy 4: Opening Range Breakout =====
+            if sym["name"] not in orb_alerted and atr and after_or:
+                or_data = or_levels.get(sym["name"], {})
+                if or_data.get("high") and or_data.get("low"):
+                    osignal = analyze_orb(
+                        symbol=sym["upstox"], name=sym["name"],
+                        current_price=q["ltp"],
+                        today_low=q["low"], today_high=q["high"],
+                        or_high=or_data["high"], or_low=or_data["low"],
+                        atr=atr,
+                    )
+                    if osignal:
+                        print(f"  {sym['name']}: ORB {osignal.direction}")
+                        if send_orb_alert(tg_token, tg_chat, osignal):
+                            orb_alerted.add(sym["name"])
+            
+            time.sleep(0.4)
         except Exception as e:
             print(f"  {sym['name']}: ERROR - {e}")
-
+    
     with open(state_file, "w") as f:
         json.dump({
             "date": today,
             "gap_alerted": list(gap_alerted),
             "breakout_alerted": list(breakout_alerted),
+            "gapfill_alerted": list(gapfill_alerted),
+            "orb_alerted": list(orb_alerted),
+            "or_levels": or_levels,
+            "atr_cache": atr_cache,
         }, f)
-
+    
     print("Done.")
 
 
