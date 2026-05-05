@@ -1,0 +1,40 @@
+name: Upstox Token Exchange
+
+on:
+  workflow_dispatch:
+    inputs:
+      code:
+        description: 'Authorization code from Upstox redirect URL'
+        required: true
+
+jobs:
+  exchange:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Exchange authorization code for access token
+        env:
+          API_KEY: ${{ secrets.UPSTOX_API_KEY }}
+          API_SECRET: ${{ secrets.UPSTOX_API_SECRET }}
+          AUTH_CODE: ${{ github.event.inputs.code }}
+        run: |
+          echo "Exchanging code: ${AUTH_CODE}"
+          echo "---"
+          RESPONSE=$(curl -s -X POST https://api.upstox.com/v2/login/authorization/token \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -H "Accept: application/json" \
+            --data-urlencode "code=${AUTH_CODE}" \
+            --data-urlencode "client_id=${API_KEY}" \
+            --data-urlencode "client_secret=${API_SECRET}" \
+            --data-urlencode "redirect_uri=https://127.0.0.1" \
+            --data-urlencode "grant_type=authorization_code")
+          echo "Response:"
+          echo "$RESPONSE"
+          echo "---"
+          ACCESS_TOKEN=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('access_token', 'NOT_FOUND'))")
+          echo ""
+          echo "============================================"
+          echo "ACCESS TOKEN:"
+          echo "$ACCESS_TOKEN"
+          echo "============================================"
+          echo ""
+          echo "Copy the token above and update UPSTOX_ACCESS_TOKEN secret."
