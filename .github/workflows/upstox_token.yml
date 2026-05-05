@@ -17,8 +17,6 @@ jobs:
           API_SECRET: ${{ secrets.UPSTOX_API_SECRET }}
           AUTH_CODE: ${{ github.event.inputs.code }}
         run: |
-          echo "Exchanging code: ${AUTH_CODE}"
-          echo "---"
           RESPONSE=$(curl -s -X POST https://api.upstox.com/v2/login/authorization/token \
             -H "Content-Type: application/x-www-form-urlencoded" \
             -H "Accept: application/json" \
@@ -27,14 +25,23 @@ jobs:
             --data-urlencode "client_secret=${API_SECRET}" \
             --data-urlencode "redirect_uri=https://127.0.0.1" \
             --data-urlencode "grant_type=authorization_code")
-          echo "Response:"
-          echo "$RESPONSE"
-          echo "---"
-          ACCESS_TOKEN=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('access_token', 'NOT_FOUND'))")
-          echo ""
-          echo "============================================"
-          echo "ACCESS TOKEN:"
-          echo "$ACCESS_TOKEN"
-          echo "============================================"
-          echo ""
-          echo "Copy the token above and update UPSTOX_ACCESS_TOKEN secret."
+          
+          STATUS=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print('SUCCESS' if 'access_token' in d else 'FAIL')" 2>/dev/null || echo "FAIL")
+          
+          if [ "$STATUS" = "SUCCESS" ]; then
+            echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])" > token.txt
+            echo "Token successfully obtained and saved to artifact."
+            echo "Download the artifact below to retrieve it."
+          else
+            echo "FAILED to get token. Response from Upstox:"
+            echo "$RESPONSE"
+            exit 1
+          fi
+      
+      - name: Upload token as artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstox-token
+          path: token.txt
+          retention-days: 1
