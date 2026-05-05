@@ -10,6 +10,8 @@ from orb_detector import analyze_orb, is_in_or_window, is_after_or_window
 from ma_trend_detector import analyze_ma_trend
 from cprbo_detector import analyze_cprbo
 from atr_calculator import calculate_atr
+from analyst_ratings import get_analyst_rating
+from report_generator import generate_report
 from quote_fetcher import (
     get_upstox_quote, get_upstox_daily_candles, get_upstox_intraday_candles,
     get_upstox_yesterday_ohlc, get_mock_quote, get_mock_candles,
@@ -22,6 +24,7 @@ from telegram_notifier import (
 
 IST = pytz.timezone("Asia/Kolkata")
 MOCK_MODE = os.getenv("MOCK_MODE", "false").lower() == "true"
+MANUAL_RUN = os.getenv("MANUAL_RUN", "false").lower() == "true"
 
 MORNING_END_IST = (10, 30)
 
@@ -53,7 +56,7 @@ def is_after_1300_ist():
 
 
 def main():
-    if not MOCK_MODE and not is_market_hours():
+    if not MOCK_MODE and not MANUAL_RUN and not is_market_hours():
         print("Outside IST market hours. Exiting.")
         return
 
@@ -100,7 +103,6 @@ def main():
         except Exception:
             pass
 
-    # Track what's new this run
     initial_counts = {
         "gap": len(gap_alerted),
         "breakout": len(breakout_alerted),
@@ -116,10 +118,15 @@ def main():
     after_1030 = is_after_1030_ist()
     after_1300 = is_after_1300_ist()
 
-    print(f"Scanning {len(symbols)} stocks (mock={MOCK_MODE})")
-    print(f"  Windows: in_or={in_or}, after_or={after_or}, in_morning={in_morning}, after_1030={after_1030}, after_1300={after_1300}")
+    print(f"Scanning {len(symbols)} stocks (mock={MOCK_MODE}, manual={MANUAL_RUN})")
+    print(f"  Windows: in_or={in_or}, after_or={after_or}, after_1030={after_1030}, after_1300={after_1300}")
 
     error_count = 0
+    
+    # Collect data for report (only if MANUAL_RUN)
+    report_quotes = {}
+    report_ratings = {}
+    report_errors = {}
 
     for sym in symbols:
         try:
@@ -127,6 +134,9 @@ def main():
                 q = get_mock_quote(sym["name"])
             else:
                 q = get_upstox_quote(sym["upstox"], upstox_token)
+            
+            if MANUAL_RUN:
+                report_quotes[sym["name"]] = q
 
             if sym["name"] not in atr_cache:
                 if MOCK_MODE:
@@ -166,7 +176,7 @@ def main():
                 m_low = min(existing_m_low, q["low"]) if existing_m_low else q["low"]
                 morning_levels[sym["name"]] = {"high": m_high, "low": m_low}
 
-            # Strategy 1
+            # === Strategy 1: Gap ===
             if sym["name"] not in gap_alerted:
                 signal = analyze_gap(
                     symbol=sym["upstox"], name=sym["name"],
@@ -179,7 +189,7 @@ def main():
                     if send_alert(tg_token, tg_chat, signal):
                         gap_alerted.add(sym["name"])
 
-            # Strategy 2
+            # === Strategy 2: 52W Breakout ===
             if sym["name"] not in breakout_alerted:
                 bsignal = analyze_breakout(
                     symbol=sym["upstox"], name=sym["name"],
@@ -188,11 +198,11 @@ def main():
                     week52_low=q.get("week52_low", 0),
                 )
                 if bsignal:
-                    print(f"  {sym['name']}: BREAKOUT {bsignal.breakout_type.value}")
+                    print(f"  {sym['name']}: BREAKOUT")
                     if send_breakout_alert(tg_token, tg_chat, bsignal):
                         breakout_alerted.add(sym["name"])
 
-            # Strategy 3
+            # === Strategy 3: Gap Fill ===
             if sym["name"] not in gapfill_alerted and atr:
                 gfsignal = analyze_gap_fill(
                     symbol=sym["upstox"], name=sym["name"],
@@ -206,7 +216,7 @@ def main():
                     if send_gap_fill_alert(tg_token, tg_chat, gfsignal):
                         gapfill_alerted.add(sym["name"])
 
-            # Strategy 4
+            # === Strategy 4: ORB ===
             if sym["name"] not in orb_alerted and atr and after_or:
                 or_data = or_levels.get(sym["name"], {})
                 if or_data.get("high") and or_data.get("low"):
@@ -222,7 +232,7 @@ def main():
                         if send_orb_alert(tg_token, tg_chat, osignal):
                             orb_alerted.add(sym["name"])
 
-            # Strategy 5
+            # === Strategy 5: MA Trend ===
             if sym["name"] not in ma_trend_alerted and after_1030:
                 if MOCK_MODE:
                     intraday = get_mock_intraday_candles(sym["name"])
@@ -231,7 +241,6 @@ def main():
                         intraday = get_upstox_intraday_candles(sym["upstox"], upstox_token, "30minute")
                     except Exception:
                         intraday = []
-
                 if intraday:
                     msignal = analyze_ma_trend(
                         symbol=sym["upstox"], name=sym["name"],
@@ -243,7 +252,7 @@ def main():
                         if send_ma_trend_alert(tg_token, tg_chat, msignal):
                             ma_trend_alerted.add(sym["name"])
 
-            # Strategy 6
+            # === Strategy 6: CPRBO ===
             if sym["name"] not in cprbo_alerted and after_1300:
                 yest_ohlc = cpr_cache.get(sym["name"])
                 m_data = morning_levels.get(sym["name"], {})
@@ -260,6 +269,7 @@ def main():
                         if send_cprbo_alert(tg_token, tg_chat, csignal):
                             cprbo_alerted.add(sym["name"])
 
+            # Per-stock summary
             gap_pct = ((q["open"] - q["prev_close"]) / q["prev_close"] * 100) if q["prev_close"] else 0
             atr_str = f"₹{atr}" if atr else "n/a"
             print(f"  {sym['name']}: scanned (gap={gap_pct:.2f}%, ltp=₹{q['ltp']}, atr={atr_str})")
@@ -267,7 +277,10 @@ def main():
             time.sleep(0.4)
         except Exception as e:
             error_count += 1
-            print(f"  {sym['name']}: ERROR - {e}")
+            err_msg = str(e)
+            print(f"  {sym['name']}: ERROR - {err_msg}")
+            if MANUAL_RUN:
+                report_errors[sym["name"]] = err_msg
 
     # Save state
     with open(state_file, "w") as f:
@@ -285,14 +298,10 @@ def main():
             "cpr_cache": cpr_cache,
         }, f)
 
-    # Send summary
+    # Send periodic summary to Telegram (Option B times)
     new_alerts = {
-        "gap": len(gap_alerted) - initial_counts["gap"],
-        "breakout": len(breakout_alerted) - initial_counts["breakout"],
-        "gapfill": len(gapfill_alerted) - initial_counts["gapfill"],
-        "orb": len(orb_alerted) - initial_counts["orb"],
-        "ma_trend": len(ma_trend_alerted) - initial_counts["ma_trend"],
-        "cprbo": len(cprbo_alerted) - initial_counts["cprbo"],
+        k: len(locals().get(f"{k}_alerted", set())) - initial_counts.get(k, 0)
+        for k in ["gap", "breakout", "gapfill", "orb", "ma_trend", "cprbo"]
     }
     summary_data = {
         "total_scanned": len(symbols),
@@ -308,7 +317,38 @@ def main():
         },
         "new_alerts_this_run": new_alerts,
     }
-    send_summary(tg_token, tg_chat, summary_data)
+    
+    now = datetime.now(IST)
+    minutes = now.hour * 60 + now.minute
+    summary_times = [9 * 60 + 30, 11 * 60 + 30, 13 * 60 + 30, 15 * 60 + 30]
+    if MANUAL_RUN or any(stime <= minutes < stime + 5 for stime in summary_times):
+        send_summary(tg_token, tg_chat, summary_data)
+
+    # === MANUAL RUN: Generate Markdown Report with Analyst Ratings ===
+    if MANUAL_RUN:
+        print("\nGenerating analyst ratings report (manual run)...")
+        for sym in symbols:
+            try:
+                rating = get_analyst_rating(sym["yahoo"])
+                report_ratings[sym["name"]] = rating
+                label = rating.get("label", "N/A")
+                print(f"  {sym['name']}: rating={label}")
+                time.sleep(0.3)  # avoid rate-limiting yfinance
+            except Exception as e:
+                print(f"  {sym['name']}: rating error - {e}")
+                report_ratings[sym["name"]] = {"label": "N/A", "available": False}
+        
+        report_path = "scan_report.md"
+        scan_data = {
+            "symbols": symbols,
+            "quotes": report_quotes,
+            "ratings": report_ratings,
+            "atrs": atr_cache,
+            "alerts_today": summary_data["alerts_today"],
+            "errors": report_errors,
+        }
+        generate_report(scan_data, report_path)
+        print(f"Report written to {report_path}")
 
     print("Done.")
 
