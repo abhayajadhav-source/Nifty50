@@ -1,15 +1,11 @@
 import hashlib, random
+from datetime import datetime, timedelta
 import requests
 
 
 def get_upstox_quote(instrument_key, access_token):
-    """
-    Real-time quote from Upstox v2 API.
-    Returns prev_close, today's open, LTP, today's low, today's high,
-    52-week high, and 52-week low.
-    """
+    """Real-time quote from Upstox v2 API."""
     clean_token = (access_token or "").strip()
-    
     headers = {
         "Authorization": f"Bearer {clean_token}",
         "Accept": "application/json",
@@ -17,7 +13,6 @@ def get_upstox_quote(instrument_key, access_token):
     url = f"https://api.upstox.com/v2/market-quote/quotes?instrument_key={instrument_key}"
     
     r = requests.get(url, headers=headers, timeout=10)
-    
     if r.status_code != 200:
         raise ValueError(f"Upstox API error {r.status_code}: {r.text[:200]}")
     
@@ -27,27 +22,20 @@ def get_upstox_quote(instrument_key, access_token):
     
     response_data = data.get("data", {})
     if not response_data:
-        raise ValueError(f"Empty data for {instrument_key} (possibly invalid ISIN or stock not in F&O)")
+        raise ValueError(f"Empty data for {instrument_key}")
     
     quote = list(response_data.values())[0]
-    
     if not quote:
-        raise ValueError(f"No quote object in response for {instrument_key}")
+        raise ValueError(f"No quote object for {instrument_key}")
     
     ohlc = quote.get("ohlc") or {}
-    
     prev_close = ohlc.get("close", 0)
     open_price = ohlc.get("open", 0)
     ltp = quote.get("last_price", 0)
     
     if not all([prev_close, open_price, ltp]):
-        raise ValueError(f"Incomplete OHLC data for {instrument_key}: prev={prev_close}, open={open_price}, ltp={ltp}")
+        raise ValueError(f"Incomplete OHLC for {instrument_key}")
     
-    # 52-week high/low — Upstox returns these in the quote object
-    week52_high = quote.get("upper_circuit_limit") or 0  # placeholder; real field below
-    week52_low = quote.get("lower_circuit_limit") or 0
-    
-    # The actual 52-week fields in Upstox v2 response:
     week52_high = quote.get("week_52_high") or quote.get("year_high") or 0
     week52_low = quote.get("week_52_low") or quote.get("year_low") or 0
     
@@ -62,8 +50,41 @@ def get_upstox_quote(instrument_key, access_token):
     }
 
 
+def get_upstox_daily_candles(instrument_key, access_token, days=20):
+    """
+    Fetches last N days of daily candles for ATR calculation.
+    Returns list of dicts: [{"high": .., "low": .., "close": ..}, ...]
+    """
+    clean_token = (access_token or "").strip()
+    headers = {
+        "Authorization": f"Bearer {clean_token}",
+        "Accept": "application/json",
+    }
+    
+    to_date = datetime.now().strftime("%Y-%m-%d")
+    from_date = (datetime.now() - timedelta(days=days + 10)).strftime("%Y-%m-%d")
+    
+    # Upstox encodes | as %7C in URLs
+    encoded_key = instrument_key.replace("|", "%7C")
+    url = f"https://api.upstox.com/v2/historical-candle/{encoded_key}/day/{to_date}/{from_date}"
+    
+    r = requests.get(url, headers=headers, timeout=15)
+    if r.status_code != 200:
+        raise ValueError(f"Upstox candles error {r.status_code}: {r.text[:200]}")
+    
+    data = r.json()
+    if data.get("status") != "success":
+        raise ValueError(f"Upstox candles non-success: {str(data)[:200]}")
+    
+    candles = data.get("data", {}).get("candles", [])
+    # Each candle: [timestamp, open, high, low, close, volume, oi]
+    return [
+        {"high": float(c[2]), "low": float(c[3]), "close": float(c[4])}
+        for c in candles[-days:]
+    ]
+
+
 def get_mock_quote(name):
-    """Synthetic quote for dry runs. Deterministic per stock name."""
     seed = int(hashlib.md5(name.encode()).hexdigest(), 16) % 10000
     random.seed(seed)
     prev = round(random.uniform(500, 3000), 2)
@@ -77,14 +98,11 @@ def get_mock_quote(name):
         ltp = round(open_p * (1 + retrace / 100), 2)
         low, high = open_p, ltp
     
-    # Mock 52-week high/low — make some stocks near their high/low
     breakout_chance = random.random()
     if breakout_chance < 0.15:
-        # Near 52-week high
         week52_high = ltp * 0.998
         week52_low = ltp * 0.65
     elif breakout_chance < 0.30:
-        # Near 52-week low
         week52_high = ltp * 1.45
         week52_low = ltp * 1.002
     else:
@@ -97,3 +115,20 @@ def get_mock_quote(name):
         "week52_high": round(week52_high, 2),
         "week52_low": round(week52_low, 2),
     }
+
+
+def get_mock_candles(name, days=14):
+    """Synthetic 14-day candles for mock mode."""
+    seed = int(hashlib.md5(name.encode()).hexdigest(), 16) % 10000
+    random.seed(seed)
+    base_price = random.uniform(500, 3000)
+    candles = []
+    price = base_price
+    for _ in range(days):
+        daily_range = price * random.uniform(0.01, 0.025)
+        high = price + daily_range / 2
+        low = price - daily_range / 2
+        close = random.uniform(low, high)
+        candles.append({"high": round(high, 2), "low": round(low, 2), "close": round(close, 2)})
+        price = close * (1 + random.uniform(-0.01, 0.01))
+    return candles
