@@ -1,45 +1,39 @@
-import yfinance as yf
 import hashlib, random
-from datetime import datetime
-import pytz
+import requests
 
-IST = pytz.timezone("Asia/Kolkata")
 
-def get_yahoo_quote(yahoo_symbol):
+def get_upstox_quote(instrument_key, access_token):
     """
-    Returns prev_close (yesterday's close), today's open, current price (LTP),
-    today's low, and today's high using Yahoo Finance.
-    Yahoo data for NSE has ~15 min delay on free tier.
+    Real-time quote from Upstox v2 API.
+    Returns prev_close, today's open, current price (LTP), today's low, today's high.
     """
-    ticker = yf.Ticker(yahoo_symbol)
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/json",
+    }
+    url = f"https://api.upstox.com/v2/market-quote/quotes?instrument_key={instrument_key}"
     
-    # 2-day daily history → yesterday's close + today's OHLC
-    hist = ticker.history(period="2d", interval="1d")
-    if len(hist) < 2:
-        raise ValueError(f"Insufficient history for {yahoo_symbol}")
+    r = requests.get(url, headers=headers, timeout=10)
     
-    prev_close = float(hist["Close"].iloc[-2])
-    today_open = float(hist["Open"].iloc[-1])
+    if r.status_code != 200:
+        raise ValueError(f"Upstox API error {r.status_code}: {r.text[:200]}")
     
-    # 1-min intraday for current price + today's low/high
-    intraday = ticker.history(period="1d", interval="1m")
-    if len(intraday) == 0:
-        # market just opened, fall back to daily
-        return {
-            "prev_close": prev_close,
-            "open": today_open,
-            "ltp": float(hist["Close"].iloc[-1]),
-            "low": float(hist["Low"].iloc[-1]),
-            "high": float(hist["High"].iloc[-1]),
-        }
+    data = r.json()
+    if data.get("status") != "success":
+        raise ValueError(f"Upstox returned non-success: {str(data)[:200]}")
+    
+    # Response key uses ":" instead of "|" — handle both
+    quote = list(data["data"].values())[0]
+    ohlc = quote.get("ohlc", {})
     
     return {
-        "prev_close": prev_close,
-        "open": today_open,
-        "ltp": float(intraday["Close"].iloc[-1]),
-        "low": float(intraday["Low"].min()),
-        "high": float(intraday["High"].max()),
+        "prev_close": float(ohlc.get("close", 0)),  # previous day's close
+        "open": float(ohlc.get("open", 0)),
+        "ltp": float(quote.get("last_price", 0)),
+        "low": float(ohlc.get("low", 0)),
+        "high": float(ohlc.get("high", 0)),
     }
+
 
 def get_mock_quote(name):
     """Synthetic quote for dry runs. Deterministic per stock name."""
