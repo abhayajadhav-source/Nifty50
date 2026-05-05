@@ -24,17 +24,16 @@ jobs:
         uses: actions/cache@v4
         with:
           path: alerted_today.json
-          key: alert-state-${{ github.run_id }}
-          restore-keys: alert-state-
+          key: alert-state-v4-${{ github.run_id }}
+          restore-keys: alert-state-v4-
       
       - name: Install dependencies
         run: pip install -r requirements.txt
       
       - name: Run monitor
         env:
-          FINNHUB_KEY: ${{ secrets.FINNHUB_KEY }}
-          ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          UPSTOX_ACCESS_TOKEN: ${{ secrets.UPSTOX_ACCESS_TOKEN }}
           MOCK_MODE: ${{ github.event.inputs.mock_mode || 'false' }}
         run: python src/main.py
