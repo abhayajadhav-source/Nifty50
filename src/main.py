@@ -17,14 +17,13 @@ from quote_fetcher import (
 )
 from telegram_notifier import (
     send_alert, send_breakout_alert, send_gap_fill_alert, send_orb_alert,
-    send_ma_trend_alert, send_cprbo_alert,
+    send_ma_trend_alert, send_cprbo_alert, send_summary,
 )
 
 IST = pytz.timezone("Asia/Kolkata")
 MOCK_MODE = os.getenv("MOCK_MODE", "false").lower() == "true"
 
-# Time markers
-MORNING_END_IST = (10, 30)  # capture morning high/low through this time
+MORNING_END_IST = (10, 30)
 
 
 def is_market_hours():
@@ -36,7 +35,6 @@ def is_market_hours():
 
 
 def is_in_morning_window():
-    """9:15 to 10:30 — track morning high/low."""
     now = datetime.now(IST)
     minutes = now.hour * 60 + now.minute
     return 9 * 60 + 15 <= minutes <= MORNING_END_IST[0] * 60 + MORNING_END_IST[1]
@@ -80,9 +78,9 @@ def main():
     ma_trend_alerted = set()
     cprbo_alerted = set()
     or_levels = {}
-    morning_levels = {}      # {stock_name: {"high": x, "low": y}}
+    morning_levels = {}
     atr_cache = {}
-    cpr_cache = {}           # {stock_name: {"high": .., "low": .., "close": ..}}
+    cpr_cache = {}
 
     if os.path.exists(state_file):
         try:
@@ -102,14 +100,26 @@ def main():
         except Exception:
             pass
 
+    # Track what's new this run
+    initial_counts = {
+        "gap": len(gap_alerted),
+        "breakout": len(breakout_alerted),
+        "gapfill": len(gapfill_alerted),
+        "orb": len(orb_alerted),
+        "ma_trend": len(ma_trend_alerted),
+        "cprbo": len(cprbo_alerted),
+    }
+
     in_or = is_in_or_window()
     after_or = is_after_or_window()
     in_morning = is_in_morning_window()
     after_1030 = is_after_1030_ist()
     after_1300 = is_after_1300_ist()
-    
+
     print(f"Scanning {len(symbols)} stocks (mock={MOCK_MODE})")
     print(f"  Windows: in_or={in_or}, after_or={after_or}, in_morning={in_morning}, after_1030={after_1030}, after_1300={after_1300}")
+
+    error_count = 0
 
     for sym in symbols:
         try:
@@ -118,7 +128,6 @@ def main():
             else:
                 q = get_upstox_quote(sym["upstox"], upstox_token)
 
-            # Compute or fetch ATR (cache once per day)
             if sym["name"] not in atr_cache:
                 if MOCK_MODE:
                     daily_candles = get_mock_candles(sym["name"])
@@ -134,7 +143,6 @@ def main():
                     atr_cache[sym["name"]] = atr_value
             atr = atr_cache.get(sym["name"])
 
-            # Cache yesterday's OHLC for CPR (once per day)
             if after_1300 and sym["name"] not in cpr_cache:
                 if MOCK_MODE:
                     cpr_cache[sym["name"]] = get_mock_yesterday_ohlc(sym["name"])
@@ -144,7 +152,6 @@ def main():
                     except Exception as e:
                         print(f"  {sym['name']}: yesterday OHLC fetch failed - {e}")
 
-            # Track Opening Range during 9:15-9:30
             if in_or:
                 cur = or_levels.get(sym["name"], {})
                 cur_high = max(cur.get("high", 0), q["high"])
@@ -152,7 +159,6 @@ def main():
                 cur_low = min(existing_low, q["low"]) if existing_low else q["low"]
                 or_levels[sym["name"]] = {"high": cur_high, "low": cur_low}
 
-            # Track Morning High/Low during 9:15-10:30
             if in_morning:
                 cur_m = morning_levels.get(sym["name"], {})
                 m_high = max(cur_m.get("high", 0), q["high"])
@@ -160,7 +166,7 @@ def main():
                 m_low = min(existing_m_low, q["low"]) if existing_m_low else q["low"]
                 morning_levels[sym["name"]] = {"high": m_high, "low": m_low}
 
-            # ===== Strategy 1: Gap & Retracement =====
+            # Strategy 1
             if sym["name"] not in gap_alerted:
                 signal = analyze_gap(
                     symbol=sym["upstox"], name=sym["name"],
@@ -173,7 +179,7 @@ def main():
                     if send_alert(tg_token, tg_chat, signal):
                         gap_alerted.add(sym["name"])
 
-            # ===== Strategy 2: 52-Week Breakout =====
+            # Strategy 2
             if sym["name"] not in breakout_alerted:
                 bsignal = analyze_breakout(
                     symbol=sym["upstox"], name=sym["name"],
@@ -186,7 +192,7 @@ def main():
                     if send_breakout_alert(tg_token, tg_chat, bsignal):
                         breakout_alerted.add(sym["name"])
 
-            # ===== Strategy 3: Gap Fill Rejection =====
+            # Strategy 3
             if sym["name"] not in gapfill_alerted and atr:
                 gfsignal = analyze_gap_fill(
                     symbol=sym["upstox"], name=sym["name"],
@@ -200,7 +206,7 @@ def main():
                     if send_gap_fill_alert(tg_token, tg_chat, gfsignal):
                         gapfill_alerted.add(sym["name"])
 
-            # ===== Strategy 4: Opening Range Breakout =====
+            # Strategy 4
             if sym["name"] not in orb_alerted and atr and after_or:
                 or_data = or_levels.get(sym["name"], {})
                 if or_data.get("high") and or_data.get("low"):
@@ -216,16 +222,16 @@ def main():
                         if send_orb_alert(tg_token, tg_chat, osignal):
                             orb_alerted.add(sym["name"])
 
-            # ===== Strategy 5: MA Trend Following =====
+            # Strategy 5
             if sym["name"] not in ma_trend_alerted and after_1030:
                 if MOCK_MODE:
                     intraday = get_mock_intraday_candles(sym["name"])
                 else:
                     try:
                         intraday = get_upstox_intraday_candles(sym["upstox"], upstox_token, "30minute")
-                    except Exception as e:
+                    except Exception:
                         intraday = []
-                
+
                 if intraday:
                     msignal = analyze_ma_trend(
                         symbol=sym["upstox"], name=sym["name"],
@@ -237,7 +243,7 @@ def main():
                         if send_ma_trend_alert(tg_token, tg_chat, msignal):
                             ma_trend_alerted.add(sym["name"])
 
-            # ===== Strategy 6: CPRBO =====
+            # Strategy 6
             if sym["name"] not in cprbo_alerted and after_1300:
                 yest_ohlc = cpr_cache.get(sym["name"])
                 m_data = morning_levels.get(sym["name"], {})
@@ -254,15 +260,16 @@ def main():
                         if send_cprbo_alert(tg_token, tg_chat, csignal):
                             cprbo_alerted.add(sym["name"])
 
-            # Per-stock summary
             gap_pct = ((q["open"] - q["prev_close"]) / q["prev_close"] * 100) if q["prev_close"] else 0
             atr_str = f"₹{atr}" if atr else "n/a"
             print(f"  {sym['name']}: scanned (gap={gap_pct:.2f}%, ltp=₹{q['ltp']}, atr={atr_str})")
 
             time.sleep(0.4)
         except Exception as e:
+            error_count += 1
             print(f"  {sym['name']}: ERROR - {e}")
 
+    # Save state
     with open(state_file, "w") as f:
         json.dump({
             "date": today,
@@ -277,6 +284,31 @@ def main():
             "atr_cache": atr_cache,
             "cpr_cache": cpr_cache,
         }, f)
+
+    # Send summary
+    new_alerts = {
+        "gap": len(gap_alerted) - initial_counts["gap"],
+        "breakout": len(breakout_alerted) - initial_counts["breakout"],
+        "gapfill": len(gapfill_alerted) - initial_counts["gapfill"],
+        "orb": len(orb_alerted) - initial_counts["orb"],
+        "ma_trend": len(ma_trend_alerted) - initial_counts["ma_trend"],
+        "cprbo": len(cprbo_alerted) - initial_counts["cprbo"],
+    }
+    summary_data = {
+        "total_scanned": len(symbols),
+        "errors": error_count,
+        "timestamp": datetime.now(IST).strftime("%H:%M IST"),
+        "alerts_today": {
+            "gap": list(gap_alerted),
+            "breakout": list(breakout_alerted),
+            "gapfill": list(gapfill_alerted),
+            "orb": list(orb_alerted),
+            "ma_trend": list(ma_trend_alerted),
+            "cprbo": list(cprbo_alerted),
+        },
+        "new_alerts_this_run": new_alerts,
+    }
+    send_summary(tg_token, tg_chat, summary_data)
 
     print("Done.")
 
