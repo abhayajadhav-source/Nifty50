@@ -1,12 +1,10 @@
 import os, json, time, sys
 from datetime import datetime
-import pytz, finnhub
+import pytz
 
 sys.path.insert(0, os.path.dirname(__file__))
 from gap_detector import analyze_gap
-from quote_fetcher import get_yahoo_quote, get_mock_quote
-from news_fetcher import fetch_recent_news
-from llm_analyzer import analyze_with_claude
+from quote_fetcher import get_upstox_quote, get_mock_quote
 from telegram_notifier import send_alert
 
 IST = pytz.timezone("Asia/Kolkata")
@@ -26,12 +24,13 @@ def main():
         print("Outside IST market hours. Exiting.")
         return
 
-    finnhub_key = os.environ["FINNHUB_KEY"]
-    claude_key = os.environ["ANTHROPIC_KEY"]
     tg_token = os.environ["TELEGRAM_TOKEN"]
     tg_chat = os.environ["TELEGRAM_CHAT_ID"]
+    upstox_token = os.environ.get("UPSTOX_ACCESS_TOKEN", "")
 
-    fh = finnhub.Client(api_key=finnhub_key)
+    if not MOCK_MODE and not upstox_token:
+        print("ERROR: UPSTOX_ACCESS_TOKEN missing from secrets")
+        return
 
     with open("config/nifty50.json") as f:
         symbols = json.load(f)["symbols"]
@@ -55,15 +54,20 @@ def main():
             print(f"  {sym['name']}: already alerted today, skipping")
             continue
         try:
-            q = get_mock_quote(sym["name"]) if MOCK_MODE else get_yahoo_quote(sym["yahoo"])
+            if MOCK_MODE:
+                q = get_mock_quote(sym["name"])
+            else:
+                q = get_upstox_quote(sym["upstox"], upstox_token)
+
             signal = analyze_gap(
-                symbol=sym["yahoo"], name=sym["name"],
+                symbol=sym["upstox"], name=sym["name"],
                 prev_close=q["prev_close"], open_price=q["open"],
                 current_price=q["ltp"],
                 low_since_open=q["low"], high_since_open=q["high"],
             )
             if not signal:
-                print(f"  {sym['name']}: no qualifying gap")
+                gap_pct = ((q["open"] - q["prev_close"]) / q["prev_close"] * 100) if q["prev_close"] else 0
+                print(f"  {sym['name']}: no qualifying gap (gap={gap_pct:.2f}%)")
                 continue
             if not signal.in_entry_zone:
                 print(f"  {sym['name']}: gap {signal.gap_pct}% but retracement {signal.retracement_pct}% not in zone")
@@ -72,19 +76,14 @@ def main():
                 print(f"  {sym['name']}: broke floor, invalid")
                 continue
 
-            print(f"  {sym['name']}: VALID SETUP, asking Claude...")
-            news = fetch_recent_news(fh, sym["finnhub"])
-            llm_result = analyze_with_claude(claude_key, signal.__dict__, news)
-            print(f"  {sym['name']}: Claude says {llm_result['verdict']}")
+            print(f"  {sym['name']}: VALID SETUP — sending alert")
+            success = send_alert(tg_token, tg_chat, signal)
+            if success:
+                alerted.add(sym["name"])
+            else:
+                print(f"  {sym['name']}: alert failed, will retry next run")
 
-            if llm_result["verdict"] in ("TAKE_TRADE", "WAIT"):
-                success = send_alert(tg_token, tg_chat, signal, llm_result)
-                if success:
-                    alerted.add(sym["name"])
-                else:
-                    print(f"  {sym['name']}: alert failed, will retry next run")
-
-            time.sleep(1)
+            time.sleep(0.3)
         except Exception as e:
             print(f"  {sym['name']}: ERROR - {e}")
 
