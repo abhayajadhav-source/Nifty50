@@ -29,8 +29,11 @@ jobs:
           STATUS=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print('SUCCESS' if 'access_token' in d else 'FAIL')" 2>/dev/null || echo "FAIL")
           
           if [ "$STATUS" = "SUCCESS" ]; then
-            echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])" > token.txt
-            echo "Token successfully obtained and saved to artifact."
+            # Use sys.stdout.write to avoid trailing newline
+            echo "$RESPONSE" | python3 -c "import sys,json; sys.stdout.write(json.load(sys.stdin)['access_token'])" > token.txt
+            # Verify no trailing whitespace
+            BYTES=$(wc -c < token.txt)
+            echo "Token saved. Length: ${BYTES} bytes (no trailing newline)."
             echo "Download the artifact below to retrieve it."
           else
             echo "FAILED to get token. Response from Upstox:"
