@@ -7,8 +7,11 @@ def get_upstox_quote(instrument_key, access_token):
     Real-time quote from Upstox v2 API.
     Returns prev_close, today's open, current price (LTP), today's low, today's high.
     """
+    # Strip any whitespace/newlines that may have been included in the token
+    clean_token = (access_token or "").strip()
+    
     headers = {
-        "Authorization": f"Bearer {access_token}",
+        "Authorization": f"Bearer {clean_token}",
         "Accept": "application/json",
     }
     url = f"https://api.upstox.com/v2/market-quote/quotes?instrument_key={instrument_key}"
@@ -22,12 +25,11 @@ def get_upstox_quote(instrument_key, access_token):
     if data.get("status") != "success":
         raise ValueError(f"Upstox returned non-success: {str(data)[:200]}")
     
-    # Response key uses ":" instead of "|" — handle both
     quote = list(data["data"].values())[0]
     ohlc = quote.get("ohlc", {})
     
     return {
-        "prev_close": float(ohlc.get("close", 0)),  # previous day's close
+        "prev_close": float(ohlc.get("close", 0)),
         "open": float(ohlc.get("open", 0)),
         "ltp": float(quote.get("last_price", 0)),
         "low": float(ohlc.get("low", 0)),
