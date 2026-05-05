@@ -7,7 +7,6 @@ def get_upstox_quote(instrument_key, access_token):
     Real-time quote from Upstox v2 API.
     Returns prev_close, today's open, current price (LTP), today's low, today's high.
     """
-    # Strip any whitespace/newlines that may have been included in the token
     clean_token = (access_token or "").strip()
     
     headers = {
@@ -25,13 +24,29 @@ def get_upstox_quote(instrument_key, access_token):
     if data.get("status") != "success":
         raise ValueError(f"Upstox returned non-success: {str(data)[:200]}")
     
-    quote = list(data["data"].values())[0]
-    ohlc = quote.get("ohlc", {})
+    response_data = data.get("data", {})
+    if not response_data:
+        raise ValueError(f"Empty data for {instrument_key} (possibly invalid ISIN or stock not in F&O)")
+    
+    # Upstox returns key as "NSE_EQ:INE..." (with colon) — handle any key format
+    quote = list(response_data.values())[0]
+    
+    if not quote:
+        raise ValueError(f"No quote object in response for {instrument_key}")
+    
+    ohlc = quote.get("ohlc") or {}
+    
+    prev_close = ohlc.get("close", 0)
+    open_price = ohlc.get("open", 0)
+    ltp = quote.get("last_price", 0)
+    
+    if not all([prev_close, open_price, ltp]):
+        raise ValueError(f"Incomplete OHLC data for {instrument_key}: prev={prev_close}, open={open_price}, ltp={ltp}")
     
     return {
-        "prev_close": float(ohlc.get("close", 0)),
-        "open": float(ohlc.get("open", 0)),
-        "ltp": float(quote.get("last_price", 0)),
+        "prev_close": float(prev_close),
+        "open": float(open_price),
+        "ltp": float(ltp),
         "low": float(ohlc.get("low", 0)),
         "high": float(ohlc.get("high", 0)),
     }
