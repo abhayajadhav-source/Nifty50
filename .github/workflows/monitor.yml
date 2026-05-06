@@ -1,4 +1,4 @@
-name: Nifty50 Gap Monitor
+name: Nifty50 Vikram Strategy Monitor
 
 on:
   schedule:
@@ -9,10 +9,6 @@ on:
         description: 'Run with synthetic data?'
         type: boolean
         default: false
-      manual_report:
-        description: 'Generate downloadable analyst report?'
-        type: boolean
-        default: true
 
 jobs:
   monitor:
@@ -28,8 +24,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: alerted_today.json
-          key: alert-state-v9-${{ github.run_id }}
-          restore-keys: alert-state-v9-
+          key: alert-state-v10-${{ github.run_id }}
+          restore-keys: alert-state-v10-
       
       - name: Install dependencies
         run: pip install -r requirements.txt
@@ -39,14 +35,8 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           UPSTOX_ACCESS_TOKEN: ${{ secrets.UPSTOX_ACCESS_TOKEN }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          GMAIL_RECIPIENT: ${{ secrets.GMAIL_RECIPIENT }}
           MOCK_MODE: ${{ github.event.inputs.mock_mode || 'false' }}
-          MANUAL_RUN: ${{ github.event.inputs.manual_report || 'false' }}
         run: python src/main.py
-      
-      - name: Upload report
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.manual_report == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: scan-report
-          path: scan_report.html
-          retention-days: 7
