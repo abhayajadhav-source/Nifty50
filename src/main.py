@@ -9,6 +9,7 @@ from ma_trend_detector import analyze_ma_trend
 from cprbo_detector import analyze_cprbo
 from supply_zone_detector import analyze_supply_zone
 from ppt_detector import analyze_ppt, calculate_pivots, update_pressure_state
+from inside_candle_detector import analyze_inside_candle
 from atr_calculator import calculate_atr
 from quote_fetcher import (
     get_upstox_quote, get_upstox_daily_candles, get_upstox_intraday_candles,
@@ -17,7 +18,8 @@ from quote_fetcher import (
 )
 from telegram_notifier import (
     send_gap_fill_alert, send_orb_alert, send_ma_trend_alert,
-    send_cprbo_alert, send_supply_zone_alert, send_ppt_alert, send_summary,
+    send_cprbo_alert, send_supply_zone_alert, send_ppt_alert,
+    send_inside_candle_alert, send_summary,
 )
 from gmail_notifier import send_run_summary_email
 
@@ -41,6 +43,18 @@ def is_in_morning_window():
     return 9 * 60 + 15 <= minutes <= MORNING_END_IST[0] * 60 + MORNING_END_IST[1]
 
 
+def is_after_market_open():
+    now = datetime.now(IST)
+    minutes = now.hour * 60 + now.minute
+    return minutes >= 9 * 60 + 15
+
+
+def is_after_930_ist():
+    now = datetime.now(IST)
+    minutes = now.hour * 60 + now.minute
+    return minutes >= 9 * 60 + 30
+
+
 def is_after_1000_ist():
     now = datetime.now(IST)
     minutes = now.hour * 60 + now.minute
@@ -57,13 +71,6 @@ def is_after_1300_ist():
     now = datetime.now(IST)
     minutes = now.hour * 60 + now.minute
     return minutes >= 13 * 60
-
-
-def is_after_market_open():
-    """True after 9:15 AM — needed for pressure tracking."""
-    now = datetime.now(IST)
-    minutes = now.hour * 60 + now.minute
-    return minutes >= 9 * 60 + 15
 
 
 def signal_to_dict(s):
@@ -104,11 +111,12 @@ def main():
     cprbo_alerted = set()
     supply_zone_alerted = set()
     ppt_alerted = set()
+    inside_candle_alerted = set()
     or_levels = {}
     morning_levels = {}
     atr_cache = {}
-    cpr_cache = {}            # also used as yesterday OHLC cache for PPT
-    pressure_state = {}        # {stock_name: {r1_touches, s1_touches, was_near_r1, was_near_s1}}
+    cpr_cache = {}
+    pressure_state = {}
     daily_candles_cache = {}
 
     if os.path.exists(state_file):
@@ -122,6 +130,7 @@ def main():
                     cprbo_alerted = set(data.get("cprbo_alerted", []))
                     supply_zone_alerted = set(data.get("supply_zone_alerted", []))
                     ppt_alerted = set(data.get("ppt_alerted", []))
+                    inside_candle_alerted = set(data.get("inside_candle_alerted", []))
                     or_levels = data.get("or_levels", {})
                     morning_levels = data.get("morning_levels", {})
                     atr_cache = data.get("atr_cache", {})
@@ -137,6 +146,7 @@ def main():
         "cprbo": len(cprbo_alerted),
         "supply_zone": len(supply_zone_alerted),
         "ppt": len(ppt_alerted),
+        "inside_candle": len(inside_candle_alerted),
     }
 
     new_alert_details = {
@@ -146,18 +156,20 @@ def main():
         "cprbo": [],
         "supply_zone": [],
         "ppt": [],
+        "inside_candle": [],
     }
 
     in_or = is_in_or_window()
     after_or = is_after_or_window()
     in_morning = is_in_morning_window()
     after_open = is_after_market_open()
+    after_930 = is_after_930_ist()
     after_1000 = is_after_1000_ist()
     after_1030 = is_after_1030_ist()
     after_1300 = is_after_1300_ist()
 
     print(f"Scanning {len(symbols)} stocks (mock={MOCK_MODE})")
-    print(f"  Windows: in_or={in_or}, after_or={after_or}, after_1000={after_1000}, after_1030={after_1030}, after_1300={after_1300}")
+    print(f"  Windows: in_or={in_or}, after_or={after_or}, after_930={after_930}, after_1000={after_1000}, after_1030={after_1030}, after_1300={after_1300}")
 
     error_count = 0
     errors = {}
@@ -169,7 +181,6 @@ def main():
             else:
                 q = get_upstox_quote(sym["upstox"], upstox_token)
 
-            # Daily candles cache
             if sym["name"] not in daily_candles_cache:
                 if MOCK_MODE:
                     daily_candles = get_mock_candles(sym["name"], days=20)
@@ -183,14 +194,12 @@ def main():
                     daily_candles_cache[sym["name"]] = daily_candles
             daily_candles = daily_candles_cache.get(sym["name"])
 
-            # ATR
             if sym["name"] not in atr_cache and daily_candles:
                 atr_value = calculate_atr(daily_candles)
                 if atr_value:
                     atr_cache[sym["name"]] = atr_value
             atr = atr_cache.get(sym["name"])
 
-            # Yesterday OHLC (for CPR + PPT) — fetch once per day
             if sym["name"] not in cpr_cache:
                 if MOCK_MODE:
                     cpr_cache[sym["name"]] = get_mock_yesterday_ohlc(sym["name"])
@@ -202,7 +211,6 @@ def main():
 
             yesterday_ohlc = cpr_cache.get(sym["name"])
 
-            # Track OR (9:15-9:30)
             if in_or:
                 cur = or_levels.get(sym["name"], {})
                 cur_high = max(cur.get("high", 0), q["high"])
@@ -210,7 +218,6 @@ def main():
                 cur_low = min(existing_low, q["low"]) if existing_low else q["low"]
                 or_levels[sym["name"]] = {"high": cur_high, "low": cur_low}
 
-            # Track Morning H/L (9:15-10:30)
             if in_morning:
                 cur_m = morning_levels.get(sym["name"], {})
                 m_high = max(cur_m.get("high", 0), q["high"])
@@ -218,7 +225,6 @@ def main():
                 m_low = min(existing_m_low, q["low"]) if existing_m_low else q["low"]
                 morning_levels[sym["name"]] = {"high": m_high, "low": m_low}
 
-            # Track PPT pressure (continuously after market open)
             if after_open and yesterday_ohlc:
                 pivots = calculate_pivots(yesterday_ohlc)
                 cur_pressure = pressure_state.get(sym["name"], {})
@@ -324,6 +330,21 @@ def main():
                         ppt_alerted.add(sym["name"])
                         new_alert_details["ppt"].append(signal_to_dict(pptsignal))
 
+            # === Strategy 9: Inside Candle Halt ===
+            if sym["name"] not in inside_candle_alerted and after_930 and yesterday_ohlc and atr:
+                icsignal = analyze_inside_candle(
+                    symbol=sym["upstox"], name=sym["name"],
+                    current_price=q["ltp"],
+                    today_high=q["high"], today_low=q["low"],
+                    yesterday_ohlc=yesterday_ohlc,
+                    atr=atr,
+                )
+                if icsignal:
+                    print(f"  {sym['name']}: INSIDE CANDLE {icsignal.direction}")
+                    if send_inside_candle_alert(tg_token, tg_chat, icsignal):
+                        inside_candle_alerted.add(sym["name"])
+                        new_alert_details["inside_candle"].append(signal_to_dict(icsignal))
+
             atr_str = f"₹{atr}" if atr else "n/a"
             print(f"  {sym['name']}: scanned (ltp=₹{q['ltp']}, atr={atr_str})")
 
@@ -334,7 +355,6 @@ def main():
             errors[sym["name"]] = err_msg
             print(f"  {sym['name']}: ERROR - {err_msg}")
 
-    # Save state
     with open(state_file, "w") as f:
         json.dump({
             "date": today,
@@ -344,6 +364,7 @@ def main():
             "cprbo_alerted": list(cprbo_alerted),
             "supply_zone_alerted": list(supply_zone_alerted),
             "ppt_alerted": list(ppt_alerted),
+            "inside_candle_alerted": list(inside_candle_alerted),
             "or_levels": or_levels,
             "morning_levels": morning_levels,
             "atr_cache": atr_cache,
@@ -358,6 +379,7 @@ def main():
         "cprbo": len(cprbo_alerted) - initial_counts["cprbo"],
         "supply_zone": len(supply_zone_alerted) - initial_counts["supply_zone"],
         "ppt": len(ppt_alerted) - initial_counts["ppt"],
+        "inside_candle": len(inside_candle_alerted) - initial_counts["inside_candle"],
     }
 
     summary_data = {
@@ -371,6 +393,7 @@ def main():
             "cprbo": list(cprbo_alerted),
             "supply_zone": list(supply_zone_alerted),
             "ppt": list(ppt_alerted),
+            "inside_candle": list(inside_candle_alerted),
         },
         "new_alerts_this_run": new_alerts,
     }
