@@ -4,12 +4,29 @@ import pytz
 IST = pytz.timezone("Asia/Kolkata")
 
 
+def _rating_class(label):
+    """CSS class based on analyst rating."""
+    if label in ("Strong Buy", "Buy"):
+        return "rating-buy"
+    if label in ("Sell", "Strong Sell"):
+        return "rating-sell"
+    if label == "Hold":
+        return "rating-hold"
+    return "rating-na"
+
+
+def _change_class(value):
+    if value is None:
+        return "neutral"
+    if value > 0:
+        return "positive"
+    if value < 0:
+        return "negative"
+    return "neutral"
+
+
 def generate_report(scan_data, output_path):
-    """
-    Generate a comprehensive markdown report of scan results.
-    scan_data: dict with all scan results, alerts, ratings, etc.
-    output_path: file path to write the report
-    """
+    """Generate a polished HTML report."""
     timestamp = datetime.now(IST).strftime("%Y-%m-%d %H:%M IST")
     symbols = scan_data.get("symbols", [])
     quotes = scan_data.get("quotes", {})
@@ -18,46 +35,38 @@ def generate_report(scan_data, output_path):
     alerts_today = scan_data.get("alerts_today", {})
     errors = scan_data.get("errors", {})
     
-    lines = []
-    lines.append(f"# Nifty50 Scan Report")
-    lines.append(f"Generated: {timestamp}")
-    lines.append("")
-    
-    # Section 1: Summary
-    lines.append("## 📊 Summary")
-    lines.append("")
     total = len(symbols)
     success = total - len(errors)
-    lines.append(f"- **Stocks scanned**: {success}/{total}")
-    lines.append(f"- **Errors**: {len(errors)}")
-    lines.append("")
     
-    strategy_names = {
-        "gap": "Gap & Retracement",
-        "breakout": "52W Breakout",
-        "gapfill": "Gap Fill Rejection",
-        "orb": "ORB",
-        "ma_trend": "MA Trend Following",
-        "cprbo": "CPRBO",
+    strategy_meta = {
+        "gap": ("Gap & Retracement", "🟢"),
+        "breakout": ("52W Breakout", "🚀"),
+        "gapfill": ("Gap Fill Rejection", "🔵"),
+        "orb": ("ORB", "⬆️"),
+        "ma_trend": ("MA Trend", "📈"),
+        "cprbo": ("CPRBO", "🎯"),
     }
     
-    total_alerts = sum(len(alerts_today.get(k, [])) for k in strategy_names)
-    lines.append(f"### Today's Alerts ({total_alerts} total)")
-    lines.append("")
-    for key, label in strategy_names.items():
-        alerted_stocks = alerts_today.get(key, [])
-        if alerted_stocks:
-            lines.append(f"- **{label}**: {len(alerted_stocks)} → {', '.join(alerted_stocks)}")
-        else:
-            lines.append(f"- **{label}**: 0")
-    lines.append("")
+    total_alerts = sum(len(alerts_today.get(k, [])) for k in strategy_meta)
     
-    # Section 2: All stock details with analyst ratings
-    lines.append("## 🏢 Stock-by-Stock Details")
-    lines.append("")
-    lines.append("| Stock | LTP (₹) | Day Change | Gap % | ATR | Analyst Rating | # Analysts | Target Mean (₹) | Upside | 52W High | 52W Low |")
-    lines.append("|-------|---------|------------|-------|-----|----------------|-----------|-----------------|--------|----------|---------|")
+    # Build per-strategy alert summary cards
+    alert_cards_html = ""
+    for key, (label, emoji) in strategy_meta.items():
+        stocks = alerts_today.get(key, [])
+        count = len(stocks)
+        stocks_str = ", ".join(stocks) if stocks else "—"
+        active_class = "alert-card-active" if count > 0 else ""
+        alert_cards_html += f"""
+        <div class="alert-card {active_class}">
+            <div class="alert-card-emoji">{emoji}</div>
+            <div class="alert-card-count">{count}</div>
+            <div class="alert-card-label">{label}</div>
+            <div class="alert-card-stocks">{stocks_str}</div>
+        </div>
+        """
     
+    # Build main stock table
+    stock_rows = []
     for sym in symbols:
         name = sym["name"]
         q = quotes.get(name, {})
@@ -66,7 +75,12 @@ def generate_report(scan_data, output_path):
         
         if not q:
             err = errors.get(name, "no data")
-            lines.append(f"| {name} | ERROR | — | — | — | — | — | — | — | — | — |")
+            stock_rows.append(f"""
+            <tr class="error-row">
+                <td>{name}</td>
+                <td colspan="10">⚠️ {err}</td>
+            </tr>
+            """)
             continue
         
         ltp = q.get("ltp", 0)
@@ -75,105 +89,70 @@ def generate_report(scan_data, output_path):
         day_change_pct = ((ltp - prev_close) / prev_close * 100) if prev_close else 0
         gap_pct = ((open_p - prev_close) / prev_close * 100) if prev_close else 0
         
-        atr_str = f"₹{atr}" if atr else "n/a"
+        atr_str = f"₹{atr}" if atr else "—"
         rating_label = rating.get("label", "N/A")
+        rating_cls = _rating_class(rating_label)
         num_analysts = rating.get("num_analysts") or "—"
         target_mean = rating.get("target_mean")
-        target_str = f"₹{target_mean}" if target_mean else "—"
+        target_str = f"₹{target_mean:,}" if target_mean else "—"
         upside = rating.get("upside_pct")
         upside_str = f"{upside:+.1f}%" if upside is not None else "—"
+        upside_cls = _change_class(upside)
         w52_high = q.get("week52_high", 0)
         w52_low = q.get("week52_low", 0)
         
-        lines.append(
-            f"| {name} | ₹{ltp} | {day_change_pct:+.2f}% | {gap_pct:+.2f}% | {atr_str} "
-            f"| {rating_label} | {num_analysts} | {target_str} | {upside_str} "
-            f"| ₹{w52_high} | ₹{w52_low} |"
-        )
+        day_cls = _change_class(day_change_pct)
+        gap_cls = _change_class(gap_pct)
+        
+        # Check if this stock alerted on any strategy
+        alert_badges = ""
+        for key, (label, emoji) in strategy_meta.items():
+            if name in alerts_today.get(key, []):
+                alert_badges += f'<span class="alert-badge" title="{label}">{emoji}</span>'
+        
+        stock_rows.append(f"""
+        <tr>
+            <td class="stock-name">{name} {alert_badges}</td>
+            <td class="num">₹{ltp:,}</td>
+            <td class="num {day_cls}">{day_change_pct:+.2f}%</td>
+            <td class="num {gap_cls}">{gap_pct:+.2f}%</td>
+            <td class="num">{atr_str}</td>
+            <td><span class="rating-pill {rating_cls}">{rating_label}</span></td>
+            <td class="num">{num_analysts}</td>
+            <td class="num">{target_str}</td>
+            <td class="num {upside_cls}">{upside_str}</td>
+            <td class="num">₹{w52_high:,}</td>
+            <td class="num">₹{w52_low:,}</td>
+        </tr>
+        """)
     
-    lines.append("")
-    
-    # Section 3: Alerted stocks deep-dive
-    if total_alerts > 0:
-        lines.append("## 🎯 Alerted Stocks Deep Dive")
-        lines.append("")
-        for key, label in strategy_names.items():
-            alerted_stocks = alerts_today.get(key, [])
-            if not alerted_stocks:
-                continue
-            lines.append(f"### {label}")
-            lines.append("")
-            for stock_name in alerted_stocks:
-                q = quotes.get(stock_name, {})
-                rating = ratings.get(stock_name, {})
-                ltp = q.get("ltp", 0)
-                lines.append(f"#### {stock_name}")
-                lines.append(f"- LTP: ₹{ltp}")
-                if rating.get("label") and rating.get("label") != "N/A":
-                    lines.append(f"- Analyst View: **{rating['label']}** ({rating.get('num_analysts', '?')} analysts)")
-                    if rating.get("target_mean"):
-                        upside = rating.get("upside_pct")
-                        upside_str = f", upside {upside:+.1f}%" if upside is not None else ""
-                        lines.append(f"- Mean Target: ₹{rating['target_mean']}{upside_str}")
-                lines.append("")
-    
-    # Section 4: Errors
-    if errors:
-        lines.append("## ⚠️ Errors")
-        lines.append("")
-        for stock_name, err_msg in errors.items():
-            lines.append(f"- **{stock_name}**: {err_msg}")
-        lines.append("")
-    
-    # Section 5: Ratings spotlight
-    lines.append("## 💡 Top Analyst Picks")
-    lines.append("")
-    
-    # Stocks with highest analyst upside
+    # Top picks section
     stocks_with_upside = [
         (name, ratings[name]) for name in ratings
         if ratings[name].get("upside_pct") is not None and ratings[name].get("label") in ("Strong Buy", "Buy")
     ]
     stocks_with_upside.sort(key=lambda x: x[1].get("upside_pct", 0), reverse=True)
     
-    if stocks_with_upside:
-        lines.append("### Highest Upside (Buy/Strong Buy rated)")
-        lines.append("")
-        lines.append("| Stock | Rating | Current | Target | Upside |")
-        lines.append("|-------|--------|---------|--------|--------|")
-        for name, r in stocks_with_upside[:10]:
-            lines.append(
-                f"| {name} | {r['label']} | ₹{r.get('current_price', '?')} "
-                f"| ₹{r.get('target_mean', '?')} | {r.get('upside_pct'):+.1f}% |"
-            )
-        lines.append("")
+    top_picks_rows = ""
+    for name, r in stocks_with_upside[:10]:
+        upside = r.get("upside_pct", 0)
+        cls = _change_class(upside)
+        top_picks_rows += f"""
+        <tr>
+            <td class="stock-name">{name}</td>
+            <td><span class="rating-pill {_rating_class(r['label'])}">{r['label']}</span></td>
+            <td class="num">₹{r.get('current_price', '—'):,}</td>
+            <td class="num">₹{r.get('target_mean', '—'):,}</td>
+            <td class="num {cls}">{upside:+.1f}%</td>
+        </tr>
+        """
     
-    # Stocks rated Sell/Strong Sell
     sell_rated = [
         (name, ratings[name]) for name in ratings
         if ratings[name].get("label") in ("Sell", "Strong Sell")
     ]
-    if sell_rated:
-        lines.append("### Sell-Rated Stocks")
-        lines.append("")
-        lines.append("| Stock | Rating | Current | Target | Upside |")
-        lines.append("|-------|--------|---------|--------|--------|")
-        for name, r in sell_rated:
-            upside = r.get("upside_pct")
-            upside_str = f"{upside:+.1f}%" if upside is not None else "—"
-            lines.append(
-                f"| {name} | {r['label']} | ₹{r.get('current_price', '?')} "
-                f"| ₹{r.get('target_mean', '?')} | {upside_str} |"
-            )
-        lines.append("")
-    
-    # Footer
-    lines.append("---")
-    lines.append("")
-    lines.append("*Generated by Nifty50 Gap Monitor. Analyst ratings from Yahoo Finance.*")
-    lines.append("*Not investment advice. Verify all data independently before trading.*")
-    
-    with open(output_path, "w") as f:
-        f.write("\n".join(lines))
-    
-    return output_path
+    sell_rows = ""
+    for name, r in sell_rated:
+        upside = r.get("upside_pct")
+        upside_str = f"{upside:+.1f}%" if upside is not None else "—"
+        cls = _ch
