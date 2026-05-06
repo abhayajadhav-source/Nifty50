@@ -133,7 +133,6 @@ def send_ppt_alert(bot_token, chat_id, signal):
     """Pivot Pressure Trade (Strategy 8)."""
     emoji = "💥" if signal.direction == "BUY" else "💢"
     breakout_word = "above" if signal.direction == "BUY" else "below"
-    
     msg = f"""{emoji} {signal.name} — {signal.direction} setup (Pivot Pressure Trade)
 
 📊 Pivot Levels (yesterday)
@@ -153,6 +152,39 @@ Stop Loss: ₹{signal.suggested_stop_loss} (-0.30%)
 Target: ₹{signal.suggested_target} (next pivot)
 
 ⏱️ Hold: 1-3 hours
+
+⚠️ Verify live price in Upstox before placing."""
+    return _send(bot_token, chat_id, msg, signal.name)
+
+
+def send_inside_candle_alert(bot_token, chat_id, signal):
+    """Inside Candle Halt (Strategy 9 — Subasish Pani)."""
+    emoji = "📦" if signal.direction == "BUY" else "📫"
+    breakout_word = "above" if signal.direction == "BUY" else "below"
+    
+    msg = f"""{emoji} {signal.name} — {signal.direction} setup (Inside Candle Halt)
+
+📊 Mother Candle (yesterday)
+MC High: ₹{signal.mc_high}
+MC Low: ₹{signal.mc_low}
+MC Range: ₹{signal.mc_range} ({signal.mc_range_atr_multiple}× ATR)
+
+📦 Today's Inside Action
+Today High: ₹{signal.today_high_so_far}
+Today Low: ₹{signal.today_low_so_far}
+Pattern: Halt within MC range ✓
+
+📈 Breakout
+Current: ₹{signal.current_price}
+Broke {breakout_word}: ₹{signal.breakout_level}
+Breakout %: +{signal.breakout_pct}%
+
+🎯 Trade Plan
+Entry: ₹{signal.suggested_entry}
+Stop Loss: ₹{signal.suggested_stop_loss}
+Target: ₹{signal.suggested_target} (1.5× risk)
+
+⏱️ Hold: Intraday (close by 3:15 PM)
 
 ⚠️ Verify live price in Upstox before placing."""
     
@@ -176,6 +208,7 @@ def send_summary(bot_token, chat_id, summary_data):
         "cprbo": "CPRBO",
         "supply_zone": "Supply Zone Breakout",
         "ppt": "Pivot Pressure Trade",
+        "inside_candle": "Inside Candle Halt",
     }
 
     alert_lines = []
