@@ -9,6 +9,7 @@ from gap_fill_detector import analyze_gap_fill
 from orb_detector import analyze_orb, is_in_or_window, is_after_or_window
 from ma_trend_detector import analyze_ma_trend
 from cprbo_detector import analyze_cprbo
+from supply_zone_detector import analyze_supply_zone
 from atr_calculator import calculate_atr
 from analyst_ratings import get_analyst_rating
 from report_generator import generate_report
@@ -19,7 +20,7 @@ from quote_fetcher import (
 )
 from telegram_notifier import (
     send_alert, send_breakout_alert, send_gap_fill_alert, send_orb_alert,
-    send_ma_trend_alert, send_cprbo_alert, send_summary,
+    send_ma_trend_alert, send_cprbo_alert, send_supply_zone_alert, send_summary,
 )
 
 IST = pytz.timezone("Asia/Kolkata")
@@ -55,6 +56,12 @@ def is_after_1300_ist():
     return minutes >= 13 * 60
 
 
+def is_after_1000_ist():
+    now = datetime.now(IST)
+    minutes = now.hour * 60 + now.minute
+    return minutes >= 10 * 60
+
+
 def main():
     if not MOCK_MODE and not MANUAL_RUN and not is_market_hours():
         print("Outside IST market hours. Exiting.")
@@ -80,10 +87,12 @@ def main():
     orb_alerted = set()
     ma_trend_alerted = set()
     cprbo_alerted = set()
+    supply_zone_alerted = set()
     or_levels = {}
     morning_levels = {}
     atr_cache = {}
     cpr_cache = {}
+    daily_candles_cache = {}
 
     if os.path.exists(state_file):
         try:
@@ -96,10 +105,12 @@ def main():
                     orb_alerted = set(data.get("orb_alerted", []))
                     ma_trend_alerted = set(data.get("ma_trend_alerted", []))
                     cprbo_alerted = set(data.get("cprbo_alerted", []))
+                    supply_zone_alerted = set(data.get("supply_zone_alerted", []))
                     or_levels = data.get("or_levels", {})
                     morning_levels = data.get("morning_levels", {})
                     atr_cache = data.get("atr_cache", {})
                     cpr_cache = data.get("cpr_cache", {})
+                    daily_candles_cache = data.get("daily_candles_cache", {})
         except Exception:
             pass
 
@@ -110,20 +121,20 @@ def main():
         "orb": len(orb_alerted),
         "ma_trend": len(ma_trend_alerted),
         "cprbo": len(cprbo_alerted),
+        "supply_zone": len(supply_zone_alerted),
     }
 
     in_or = is_in_or_window()
     after_or = is_after_or_window()
     in_morning = is_in_morning_window()
+    after_1000 = is_after_1000_ist()
     after_1030 = is_after_1030_ist()
     after_1300 = is_after_1300_ist()
 
     print(f"Scanning {len(symbols)} stocks (mock={MOCK_MODE}, manual={MANUAL_RUN})")
-    print(f"  Windows: in_or={in_or}, after_or={after_or}, after_1030={after_1030}, after_1300={after_1300}")
+    print(f"  Windows: in_or={in_or}, after_or={after_or}, after_1000={after_1000}, after_1030={after_1030}, after_1300={after_1300}")
 
     error_count = 0
-    
-    # Collect data for report (only if MANUAL_RUN)
     report_quotes = {}
     report_ratings = {}
     report_errors = {}
@@ -134,25 +145,32 @@ def main():
                 q = get_mock_quote(sym["name"])
             else:
                 q = get_upstox_quote(sym["upstox"], upstox_token)
-            
+
             if MANUAL_RUN:
                 report_quotes[sym["name"]] = q
 
-            if sym["name"] not in atr_cache:
+            # Daily candles cache (used by ATR + Supply Zone)
+            if sym["name"] not in daily_candles_cache:
                 if MOCK_MODE:
-                    daily_candles = get_mock_candles(sym["name"])
-                    atr_value = calculate_atr(daily_candles)
+                    daily_candles = get_mock_candles(sym["name"], days=20)
                 else:
                     try:
                         daily_candles = get_upstox_daily_candles(sym["upstox"], upstox_token, days=20)
-                        atr_value = calculate_atr(daily_candles)
                     except Exception as e:
-                        print(f"  {sym['name']}: ATR fetch failed - {e}")
-                        atr_value = None
+                        print(f"  {sym['name']}: daily candles fetch failed - {e}")
+                        daily_candles = None
+                if daily_candles:
+                    daily_candles_cache[sym["name"]] = daily_candles
+            daily_candles = daily_candles_cache.get(sym["name"])
+
+            # ATR
+            if sym["name"] not in atr_cache and daily_candles:
+                atr_value = calculate_atr(daily_candles)
                 if atr_value:
                     atr_cache[sym["name"]] = atr_value
             atr = atr_cache.get(sym["name"])
 
+            # CPR
             if after_1300 and sym["name"] not in cpr_cache:
                 if MOCK_MODE:
                     cpr_cache[sym["name"]] = get_mock_yesterday_ohlc(sym["name"])
@@ -162,6 +180,7 @@ def main():
                     except Exception as e:
                         print(f"  {sym['name']}: yesterday OHLC fetch failed - {e}")
 
+            # Track OR
             if in_or:
                 cur = or_levels.get(sym["name"], {})
                 cur_high = max(cur.get("high", 0), q["high"])
@@ -169,6 +188,7 @@ def main():
                 cur_low = min(existing_low, q["low"]) if existing_low else q["low"]
                 or_levels[sym["name"]] = {"high": cur_high, "low": cur_low}
 
+            # Track Morning High/Low
             if in_morning:
                 cur_m = morning_levels.get(sym["name"], {})
                 m_high = max(cur_m.get("high", 0), q["high"])
@@ -176,7 +196,7 @@ def main():
                 m_low = min(existing_m_low, q["low"]) if existing_m_low else q["low"]
                 morning_levels[sym["name"]] = {"high": m_high, "low": m_low}
 
-            # === Strategy 1: Gap ===
+            # === Strategy 1: Gap & Retracement ===
             if sym["name"] not in gap_alerted:
                 signal = analyze_gap(
                     symbol=sym["upstox"], name=sym["name"],
@@ -189,7 +209,7 @@ def main():
                     if send_alert(tg_token, tg_chat, signal):
                         gap_alerted.add(sym["name"])
 
-            # === Strategy 2: 52W Breakout ===
+            # === Strategy 2: 52-Week Breakout ===
             if sym["name"] not in breakout_alerted:
                 bsignal = analyze_breakout(
                     symbol=sym["upstox"], name=sym["name"],
@@ -202,7 +222,7 @@ def main():
                     if send_breakout_alert(tg_token, tg_chat, bsignal):
                         breakout_alerted.add(sym["name"])
 
-            # === Strategy 3: Gap Fill ===
+            # === Strategy 3: Gap Fill Rejection ===
             if sym["name"] not in gapfill_alerted and atr:
                 gfsignal = analyze_gap_fill(
                     symbol=sym["upstox"], name=sym["name"],
@@ -269,6 +289,18 @@ def main():
                         if send_cprbo_alert(tg_token, tg_chat, csignal):
                             cprbo_alerted.add(sym["name"])
 
+            # === Strategy 7: Supply Zone Breakout ===
+            if sym["name"] not in supply_zone_alerted and after_1000 and daily_candles:
+                szsignal = analyze_supply_zone(
+                    symbol=sym["upstox"], name=sym["name"],
+                    current_price=q["ltp"],
+                    candles=daily_candles,
+                )
+                if szsignal:
+                    print(f"  {sym['name']}: SUPPLY ZONE BREAKOUT")
+                    if send_supply_zone_alert(tg_token, tg_chat, szsignal):
+                        supply_zone_alerted.add(sym["name"])
+
             # Per-stock summary
             gap_pct = ((q["open"] - q["prev_close"]) / q["prev_close"] * 100) if q["prev_close"] else 0
             atr_str = f"₹{atr}" if atr else "n/a"
@@ -282,7 +314,7 @@ def main():
             if MANUAL_RUN:
                 report_errors[sym["name"]] = err_msg
 
-    # Save state
+    # Save state (note: don't persist daily_candles_cache to keep state file small)
     with open(state_file, "w") as f:
         json.dump({
             "date": today,
@@ -292,16 +324,22 @@ def main():
             "orb_alerted": list(orb_alerted),
             "ma_trend_alerted": list(ma_trend_alerted),
             "cprbo_alerted": list(cprbo_alerted),
+            "supply_zone_alerted": list(supply_zone_alerted),
             "or_levels": or_levels,
             "morning_levels": morning_levels,
             "atr_cache": atr_cache,
             "cpr_cache": cpr_cache,
         }, f)
 
-    # Send periodic summary to Telegram (Option B times)
+    # Telegram summary at key times
     new_alerts = {
-        k: len(locals().get(f"{k}_alerted", set())) - initial_counts.get(k, 0)
-        for k in ["gap", "breakout", "gapfill", "orb", "ma_trend", "cprbo"]
+        "gap": len(gap_alerted) - initial_counts["gap"],
+        "breakout": len(breakout_alerted) - initial_counts["breakout"],
+        "gapfill": len(gapfill_alerted) - initial_counts["gapfill"],
+        "orb": len(orb_alerted) - initial_counts["orb"],
+        "ma_trend": len(ma_trend_alerted) - initial_counts["ma_trend"],
+        "cprbo": len(cprbo_alerted) - initial_counts["cprbo"],
+        "supply_zone": len(supply_zone_alerted) - initial_counts["supply_zone"],
     }
     summary_data = {
         "total_scanned": len(symbols),
@@ -314,17 +352,18 @@ def main():
             "orb": list(orb_alerted),
             "ma_trend": list(ma_trend_alerted),
             "cprbo": list(cprbo_alerted),
+            "supply_zone": list(supply_zone_alerted),
         },
         "new_alerts_this_run": new_alerts,
     }
-    
+
     now = datetime.now(IST)
     minutes = now.hour * 60 + now.minute
     summary_times = [9 * 60 + 30, 11 * 60 + 30, 13 * 60 + 30, 15 * 60 + 30]
     if MANUAL_RUN or any(stime <= minutes < stime + 5 for stime in summary_times):
         send_summary(tg_token, tg_chat, summary_data)
 
-    # === MANUAL RUN: Generate Markdown Report with Analyst Ratings ===
+    # Manual run report
     if MANUAL_RUN:
         print("\nGenerating analyst ratings report (manual run)...")
         for sym in symbols:
@@ -333,12 +372,12 @@ def main():
                 report_ratings[sym["name"]] = rating
                 label = rating.get("label", "N/A")
                 print(f"  {sym['name']}: rating={label}")
-                time.sleep(0.3)  # avoid rate-limiting yfinance
+                time.sleep(0.3)
             except Exception as e:
                 print(f"  {sym['name']}: rating error - {e}")
                 report_ratings[sym["name"]] = {"label": "N/A", "available": False}
-        
-        report_path = "scan_report.md"
+
+        report_path = "scan_report.html"
         scan_data = {
             "symbols": symbols,
             "quotes": report_quotes,
