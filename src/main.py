@@ -8,6 +8,7 @@ from orb_detector import analyze_orb, is_in_or_window, is_after_or_window
 from ma_trend_detector import analyze_ma_trend
 from cprbo_detector import analyze_cprbo
 from supply_zone_detector import analyze_supply_zone
+from ppt_detector import analyze_ppt, calculate_pivots, update_pressure_state
 from atr_calculator import calculate_atr
 from quote_fetcher import (
     get_upstox_quote, get_upstox_daily_candles, get_upstox_intraday_candles,
@@ -16,7 +17,7 @@ from quote_fetcher import (
 )
 from telegram_notifier import (
     send_gap_fill_alert, send_orb_alert, send_ma_trend_alert,
-    send_cprbo_alert, send_supply_zone_alert, send_summary,
+    send_cprbo_alert, send_supply_zone_alert, send_ppt_alert, send_summary,
 )
 from gmail_notifier import send_run_summary_email
 
@@ -58,8 +59,14 @@ def is_after_1300_ist():
     return minutes >= 13 * 60
 
 
+def is_after_market_open():
+    """True after 9:15 AM — needed for pressure tracking."""
+    now = datetime.now(IST)
+    minutes = now.hour * 60 + now.minute
+    return minutes >= 9 * 60 + 15
+
+
 def signal_to_dict(s):
-    """Convert any strategy signal to a dict for the email."""
     return {
         "name": getattr(s, "name", ""),
         "direction": getattr(s, "direction", ""),
@@ -96,10 +103,12 @@ def main():
     ma_trend_alerted = set()
     cprbo_alerted = set()
     supply_zone_alerted = set()
+    ppt_alerted = set()
     or_levels = {}
     morning_levels = {}
     atr_cache = {}
-    cpr_cache = {}
+    cpr_cache = {}            # also used as yesterday OHLC cache for PPT
+    pressure_state = {}        # {stock_name: {r1_touches, s1_touches, was_near_r1, was_near_s1}}
     daily_candles_cache = {}
 
     if os.path.exists(state_file):
@@ -112,10 +121,12 @@ def main():
                     ma_trend_alerted = set(data.get("ma_trend_alerted", []))
                     cprbo_alerted = set(data.get("cprbo_alerted", []))
                     supply_zone_alerted = set(data.get("supply_zone_alerted", []))
+                    ppt_alerted = set(data.get("ppt_alerted", []))
                     or_levels = data.get("or_levels", {})
                     morning_levels = data.get("morning_levels", {})
                     atr_cache = data.get("atr_cache", {})
                     cpr_cache = data.get("cpr_cache", {})
+                    pressure_state = data.get("pressure_state", {})
         except Exception:
             pass
 
@@ -125,20 +136,22 @@ def main():
         "ma_trend": len(ma_trend_alerted),
         "cprbo": len(cprbo_alerted),
         "supply_zone": len(supply_zone_alerted),
+        "ppt": len(ppt_alerted),
     }
-    
-    # Track new alert details for email
+
     new_alert_details = {
         "gapfill": [],
         "orb": [],
         "ma_trend": [],
         "cprbo": [],
         "supply_zone": [],
+        "ppt": [],
     }
 
     in_or = is_in_or_window()
     after_or = is_after_or_window()
     in_morning = is_in_morning_window()
+    after_open = is_after_market_open()
     after_1000 = is_after_1000_ist()
     after_1030 = is_after_1030_ist()
     after_1300 = is_after_1300_ist()
@@ -156,7 +169,7 @@ def main():
             else:
                 q = get_upstox_quote(sym["upstox"], upstox_token)
 
-            # Daily candles cache (used by ATR + Supply Zone)
+            # Daily candles cache
             if sym["name"] not in daily_candles_cache:
                 if MOCK_MODE:
                     daily_candles = get_mock_candles(sym["name"], days=20)
@@ -177,8 +190,8 @@ def main():
                     atr_cache[sym["name"]] = atr_value
             atr = atr_cache.get(sym["name"])
 
-            # CPR
-            if after_1300 and sym["name"] not in cpr_cache:
+            # Yesterday OHLC (for CPR + PPT) — fetch once per day
+            if sym["name"] not in cpr_cache:
                 if MOCK_MODE:
                     cpr_cache[sym["name"]] = get_mock_yesterday_ohlc(sym["name"])
                 else:
@@ -187,7 +200,9 @@ def main():
                     except Exception as e:
                         print(f"  {sym['name']}: yesterday OHLC failed - {e}")
 
-            # Track OR
+            yesterday_ohlc = cpr_cache.get(sym["name"])
+
+            # Track OR (9:15-9:30)
             if in_or:
                 cur = or_levels.get(sym["name"], {})
                 cur_high = max(cur.get("high", 0), q["high"])
@@ -195,13 +210,19 @@ def main():
                 cur_low = min(existing_low, q["low"]) if existing_low else q["low"]
                 or_levels[sym["name"]] = {"high": cur_high, "low": cur_low}
 
-            # Track Morning H/L
+            # Track Morning H/L (9:15-10:30)
             if in_morning:
                 cur_m = morning_levels.get(sym["name"], {})
                 m_high = max(cur_m.get("high", 0), q["high"])
                 existing_m_low = cur_m.get("low")
                 m_low = min(existing_m_low, q["low"]) if existing_m_low else q["low"]
                 morning_levels[sym["name"]] = {"high": m_high, "low": m_low}
+
+            # Track PPT pressure (continuously after market open)
+            if after_open and yesterday_ohlc:
+                pivots = calculate_pivots(yesterday_ohlc)
+                cur_pressure = pressure_state.get(sym["name"], {})
+                pressure_state[sym["name"]] = update_pressure_state(cur_pressure, q["ltp"], pivots)
 
             # === Strategy 3: Gap Fill Rejection ===
             if sym["name"] not in gapfill_alerted and atr:
@@ -258,15 +279,14 @@ def main():
 
             # === Strategy 6: CPRBO ===
             if sym["name"] not in cprbo_alerted and after_1300:
-                yest_ohlc = cpr_cache.get(sym["name"])
                 m_data = morning_levels.get(sym["name"], {})
-                if yest_ohlc and m_data.get("high") and m_data.get("low"):
+                if yesterday_ohlc and m_data.get("high") and m_data.get("low"):
                     csignal = analyze_cprbo(
                         symbol=sym["upstox"], name=sym["name"],
                         current_price=q["ltp"],
                         today_low=q["low"], today_high=q["high"],
                         morning_high=m_data["high"], morning_low=m_data["low"],
-                        yesterday_ohlc=yest_ohlc,
+                        yesterday_ohlc=yesterday_ohlc,
                     )
                     if csignal:
                         print(f"  {sym['name']}: CPRBO {csignal.direction}")
@@ -274,7 +294,7 @@ def main():
                             cprbo_alerted.add(sym["name"])
                             new_alert_details["cprbo"].append(signal_to_dict(csignal))
 
-            # === Strategy 7: Supply Zone Breakout ===
+            # === Strategy 7: Supply Zone ===
             if sym["name"] not in supply_zone_alerted and after_1000 and daily_candles:
                 szsignal = analyze_supply_zone(
                     symbol=sym["upstox"], name=sym["name"],
@@ -286,6 +306,23 @@ def main():
                     if send_supply_zone_alert(tg_token, tg_chat, szsignal):
                         supply_zone_alerted.add(sym["name"])
                         new_alert_details["supply_zone"].append(signal_to_dict(szsignal))
+
+            # === Strategy 8: PPT ===
+            if sym["name"] not in ppt_alerted and yesterday_ohlc and atr:
+                pstate = pressure_state.get(sym["name"], {})
+                pptsignal = analyze_ppt(
+                    symbol=sym["upstox"], name=sym["name"],
+                    current_price=q["ltp"], open_price=q["open"],
+                    today_high=q["high"], today_low=q["low"],
+                    yesterday_ohlc=yesterday_ohlc,
+                    pressure_state=pstate,
+                    atr=atr,
+                )
+                if pptsignal:
+                    print(f"  {sym['name']}: PPT {pptsignal.direction}")
+                    if send_ppt_alert(tg_token, tg_chat, pptsignal):
+                        ppt_alerted.add(sym["name"])
+                        new_alert_details["ppt"].append(signal_to_dict(pptsignal))
 
             atr_str = f"₹{atr}" if atr else "n/a"
             print(f"  {sym['name']}: scanned (ltp=₹{q['ltp']}, atr={atr_str})")
@@ -306,10 +343,12 @@ def main():
             "ma_trend_alerted": list(ma_trend_alerted),
             "cprbo_alerted": list(cprbo_alerted),
             "supply_zone_alerted": list(supply_zone_alerted),
+            "ppt_alerted": list(ppt_alerted),
             "or_levels": or_levels,
             "morning_levels": morning_levels,
             "atr_cache": atr_cache,
             "cpr_cache": cpr_cache,
+            "pressure_state": pressure_state,
         }, f)
 
     new_alerts = {
@@ -318,6 +357,7 @@ def main():
         "ma_trend": len(ma_trend_alerted) - initial_counts["ma_trend"],
         "cprbo": len(cprbo_alerted) - initial_counts["cprbo"],
         "supply_zone": len(supply_zone_alerted) - initial_counts["supply_zone"],
+        "ppt": len(ppt_alerted) - initial_counts["ppt"],
     }
 
     summary_data = {
@@ -330,18 +370,17 @@ def main():
             "ma_trend": list(ma_trend_alerted),
             "cprbo": list(cprbo_alerted),
             "supply_zone": list(supply_zone_alerted),
+            "ppt": list(ppt_alerted),
         },
         "new_alerts_this_run": new_alerts,
     }
 
-    # Telegram summary at key times only
     now = datetime.now(IST)
     minutes = now.hour * 60 + now.minute
     summary_times = [9 * 60 + 30, 11 * 60 + 30, 13 * 60 + 30, 15 * 60 + 30]
     if any(stime <= minutes < stime + 5 for stime in summary_times):
         send_summary(tg_token, tg_chat, summary_data)
 
-    # Gmail summary EVERY RUN
     if gmail_user and gmail_pwd and gmail_recipient:
         run_data = {
             "total_scanned": len(symbols),
