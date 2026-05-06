@@ -129,6 +129,36 @@ Target: ₹{signal.suggested_target} (2× risk)
     return _send(bot_token, chat_id, msg, signal.name)
 
 
+def send_ppt_alert(bot_token, chat_id, signal):
+    """Pivot Pressure Trade (Strategy 8)."""
+    emoji = "💥" if signal.direction == "BUY" else "💢"
+    breakout_word = "above" if signal.direction == "BUY" else "below"
+    
+    msg = f"""{emoji} {signal.name} — {signal.direction} setup (Pivot Pressure Trade)
+
+📊 Pivot Levels (yesterday)
+PP: ₹{signal.pp}
+R2: ₹{signal.r2} | R1: ₹{signal.r1}
+S1: ₹{signal.s1} | S2: ₹{signal.s2}
+
+📈 Pressure & Breakout
+Pressure built at: ₹{signal.pressure_level}
+Touches before break: {signal.pressure_touches}
+Current: ₹{signal.current_price}
+Broke {breakout_word} pivot by: {signal.breakout_pct}%
+
+🎯 Trade Plan
+Entry: ₹{signal.suggested_entry}
+Stop Loss: ₹{signal.suggested_stop_loss} (-0.30%)
+Target: ₹{signal.suggested_target} (next pivot)
+
+⏱️ Hold: 1-3 hours
+
+⚠️ Verify live price in Upstox before placing."""
+    
+    return _send(bot_token, chat_id, msg, signal.name)
+
+
 def send_summary(bot_token, chat_id, summary_data):
     """Periodic Telegram summary at key times."""
     total = summary_data.get("total_scanned", 0)
@@ -145,6 +175,7 @@ def send_summary(bot_token, chat_id, summary_data):
         "ma_trend": "MA Trend",
         "cprbo": "CPRBO",
         "supply_zone": "Supply Zone Breakout",
+        "ppt": "Pivot Pressure Trade",
     }
 
     alert_lines = []
