@@ -94,7 +94,7 @@ def main():
     gmail_user = os.environ.get("GMAIL_USER", "")
     gmail_pwd = os.environ.get("GMAIL_APP_PASSWORD", "")
     gmail_recipient = os.environ.get("GMAIL_RECIPIENT", "")
-
+print(f"DEBUG: GMAIL_USER set={bool(gmail_user)}, GMAIL_APP_PASSWORD set={bool(gmail_pwd)}, GMAIL_RECIPIENT set={bool(gmail_recipient)}")
     if not MOCK_MODE and not upstox_token:
         print("ERROR: UPSTOX_ACCESS_TOKEN missing")
         return
