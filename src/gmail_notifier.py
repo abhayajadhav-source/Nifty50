@@ -30,6 +30,7 @@ def send_run_summary_email(gmail_user, gmail_app_password, recipient,
         "ma_trend": ("MA Trend Following", "📈"),
         "cprbo": ("CPR Late Breakout", "🎯"),
         "supply_zone": ("Supply Zone Breakout", "🔥"),
+        "ppt": ("Pivot Pressure Trade", "💥"),
     }
     
     new_total = sum(new_alerts.values())
