@@ -28,8 +28,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: alerted_today.json
-          key: alert-state-v8-${{ github.run_id }}
-          restore-keys: alert-state-v8-
+          key: alert-state-v9-${{ github.run_id }}
+          restore-keys: alert-state-v9-
       
       - name: Install dependencies
         run: pip install -r requirements.txt
@@ -48,5 +48,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: scan-report
-          path: scan_report.md
+          path: scan_report.html
           retention-days: 7
