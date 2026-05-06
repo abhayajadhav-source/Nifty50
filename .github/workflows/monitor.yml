@@ -24,8 +24,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: alerted_today.json
-          key: alert-state-v11-${{ github.run_id }}
-          restore-keys: alert-state-v11-
+          key: alert-state-v12-${{ github.run_id }}
+          restore-keys: alert-state-v12-
       
       - name: Install dependencies
         run: pip install -r requirements.txt
