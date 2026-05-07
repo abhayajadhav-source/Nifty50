@@ -11,6 +11,7 @@ from supply_zone_detector import analyze_supply_zone
 from ppt_detector import analyze_ppt, calculate_pivots, update_pressure_state
 from inside_candle_detector import analyze_inside_candle
 from atr_calculator import calculate_atr
+from news_fetcher import fetch_stock_news, is_significant_gap
 from quote_fetcher import (
     get_upstox_quote, get_upstox_daily_candles, get_upstox_intraday_candles,
     get_upstox_yesterday_ohlc, get_mock_quote, get_mock_candles,
@@ -19,7 +20,7 @@ from quote_fetcher import (
 from telegram_notifier import (
     send_gap_fill_alert, send_orb_alert, send_ma_trend_alert,
     send_cprbo_alert, send_supply_zone_alert, send_ppt_alert,
-    send_inside_candle_alert, send_summary, send_heartbeat,
+    send_inside_candle_alert, send_gap_alert, send_summary, send_heartbeat,
 )
 
 IST = pytz.timezone("Asia/Kolkata")
@@ -81,10 +82,14 @@ def main():
     tg_token = os.environ["TELEGRAM_TOKEN"]
     tg_chat = os.environ["TELEGRAM_CHAT_ID"]
     upstox_token = os.environ.get("UPSTOX_ACCESS_TOKEN", "")
+    serper_key = os.environ.get("SERPER_API_KEY", "")
 
     if not MOCK_MODE and not upstox_token:
         print("ERROR: UPSTOX_ACCESS_TOKEN missing")
         return
+
+    if not serper_key:
+        print("WARNING: SERPER_API_KEY missing — alerts will not include news context")
 
     with open("config/nifty50.json") as f:
         symbols = json.load(f)["symbols"]
@@ -99,12 +104,14 @@ def main():
     supply_zone_alerted = set()
     ppt_alerted = set()
     inside_candle_alerted = set()
+    gap_alerted = set()           # stocks notified about pre-market gap
     or_levels = {}
     morning_levels = {}
     atr_cache = {}
     cpr_cache = {}
     pressure_state = {}
     daily_candles_cache = {}
+    news_cache = {}                # caches news per stock per day to save API calls
     last_summary_time = ""
 
     if os.path.exists(state_file):
@@ -119,11 +126,13 @@ def main():
                     supply_zone_alerted = set(data.get("supply_zone_alerted", []))
                     ppt_alerted = set(data.get("ppt_alerted", []))
                     inside_candle_alerted = set(data.get("inside_candle_alerted", []))
+                    gap_alerted = set(data.get("gap_alerted", []))
                     or_levels = data.get("or_levels", {})
                     morning_levels = data.get("morning_levels", {})
                     atr_cache = data.get("atr_cache", {})
                     cpr_cache = data.get("cpr_cache", {})
                     pressure_state = data.get("pressure_state", {})
+                    news_cache = data.get("news_cache", {})
                     last_summary_time = data.get("last_summary_time", "")
         except Exception:
             pass
@@ -149,8 +158,19 @@ def main():
 
     print(f"Scanning {len(symbols)} stocks (mock={MOCK_MODE}, manual={MANUAL_RUN})")
     print(f"  Windows: in_or={in_or}, after_or={after_or}, after_930={after_930}, after_1000={after_1000}, after_1030={after_1030}, after_1300={after_1300}")
+    print(f"  Serper API: {'configured' if serper_key else 'not configured'}")
 
     error_count = 0
+
+    def get_news_for_stock(stock_name):
+        """Fetches news once per stock per day, caches result."""
+        if stock_name in news_cache:
+            return news_cache[stock_name]
+        if not serper_key:
+            return []
+        news = fetch_stock_news(serper_key, stock_name)
+        news_cache[stock_name] = news
+        return news
 
     for sym in symbols:
         try:
@@ -208,6 +228,16 @@ def main():
                 cur_pressure = pressure_state.get(sym["name"], {})
                 pressure_state[sym["name"]] = update_pressure_state(cur_pressure, q["ltp"], pivots)
 
+            # === Pre-market Gap Alert (informational, fired once per stock per day) ===
+            if sym["name"] not in gap_alerted and in_morning and is_significant_gap(q["open"], q["prev_close"]):
+                gap_pct = ((q["open"] - q["prev_close"]) / q["prev_close"]) * 100
+                print(f"  {sym['name']}: SIGNIFICANT GAP {gap_pct:.2f}% (fetching news)")
+                news = get_news_for_stock(sym["name"])
+                if send_gap_alert(tg_token, tg_chat, sym["name"], gap_pct,
+                                   q["prev_close"], q["open"], q["ltp"], news_items=news):
+                    gap_alerted.add(sym["name"])
+
+            # === Strategy 3: Gap Fill Rejection ===
             if sym["name"] not in gapfill_alerted and atr:
                 gfsignal = analyze_gap_fill(
                     symbol=sym["upstox"], name=sym["name"],
@@ -218,7 +248,8 @@ def main():
                 )
                 if gfsignal:
                     print(f"  {sym['name']}: GAP FILL REJECTION {gfsignal.direction}")
-                    if send_gap_fill_alert(tg_token, tg_chat, gfsignal):
+                    news = get_news_for_stock(sym["name"])
+                    if send_gap_fill_alert(tg_token, tg_chat, gfsignal, news_items=news):
                         gapfill_alerted.add(sym["name"])
 
             if sym["name"] not in orb_alerted and atr and after_or:
@@ -233,7 +264,8 @@ def main():
                     )
                     if osignal:
                         print(f"  {sym['name']}: ORB {osignal.direction}")
-                        if send_orb_alert(tg_token, tg_chat, osignal):
+                        news = get_news_for_stock(sym["name"])
+                        if send_orb_alert(tg_token, tg_chat, osignal, news_items=news):
                             orb_alerted.add(sym["name"])
 
             if sym["name"] not in ma_trend_alerted and after_1030:
@@ -252,7 +284,8 @@ def main():
                     )
                     if msignal:
                         print(f"  {sym['name']}: MA TREND {msignal.direction}")
-                        if send_ma_trend_alert(tg_token, tg_chat, msignal):
+                        news = get_news_for_stock(sym["name"])
+                        if send_ma_trend_alert(tg_token, tg_chat, msignal, news_items=news):
                             ma_trend_alerted.add(sym["name"])
 
             if sym["name"] not in cprbo_alerted and after_1300:
@@ -267,7 +300,8 @@ def main():
                     )
                     if csignal:
                         print(f"  {sym['name']}: CPRBO {csignal.direction}")
-                        if send_cprbo_alert(tg_token, tg_chat, csignal):
+                        news = get_news_for_stock(sym["name"])
+                        if send_cprbo_alert(tg_token, tg_chat, csignal, news_items=news):
                             cprbo_alerted.add(sym["name"])
 
             if sym["name"] not in supply_zone_alerted and after_1000 and daily_candles:
@@ -278,7 +312,8 @@ def main():
                 )
                 if szsignal:
                     print(f"  {sym['name']}: SUPPLY ZONE BREAKOUT")
-                    if send_supply_zone_alert(tg_token, tg_chat, szsignal):
+                    news = get_news_for_stock(sym["name"])
+                    if send_supply_zone_alert(tg_token, tg_chat, szsignal, news_items=news):
                         supply_zone_alerted.add(sym["name"])
 
             if sym["name"] not in ppt_alerted and yesterday_ohlc and atr:
@@ -293,7 +328,8 @@ def main():
                 )
                 if pptsignal:
                     print(f"  {sym['name']}: PPT {pptsignal.direction}")
-                    if send_ppt_alert(tg_token, tg_chat, pptsignal):
+                    news = get_news_for_stock(sym["name"])
+                    if send_ppt_alert(tg_token, tg_chat, pptsignal, news_items=news):
                         ppt_alerted.add(sym["name"])
 
             if sym["name"] not in inside_candle_alerted and after_930 and yesterday_ohlc and atr:
@@ -306,7 +342,8 @@ def main():
                 )
                 if icsignal:
                     print(f"  {sym['name']}: INSIDE CANDLE {icsignal.direction}")
-                    if send_inside_candle_alert(tg_token, tg_chat, icsignal):
+                    news = get_news_for_stock(sym["name"])
+                    if send_inside_candle_alert(tg_token, tg_chat, icsignal, news_items=news):
                         inside_candle_alerted.add(sym["name"])
 
             atr_str = f"₹{atr}" if atr else "n/a"
@@ -391,11 +428,13 @@ def main():
             "supply_zone_alerted": list(supply_zone_alerted),
             "ppt_alerted": list(ppt_alerted),
             "inside_candle_alerted": list(inside_candle_alerted),
+            "gap_alerted": list(gap_alerted),
             "or_levels": or_levels,
             "morning_levels": morning_levels,
             "atr_cache": atr_cache,
             "cpr_cache": cpr_cache,
             "pressure_state": pressure_state,
+            "news_cache": news_cache,
             "last_summary_time": last_summary_time,
         }, f)
 
