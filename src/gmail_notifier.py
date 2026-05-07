@@ -1,10 +1,36 @@
 import smtplib
+import time
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 import pytz
 
 IST = pytz.timezone("Asia/Kolkata")
+
+
+def _try_send_email(gmail_user, gmail_app_password, msg, port=587):
+    """Try sending via SMTP. Returns (success, error_message)."""
+    clean_pwd = gmail_app_password.replace(" ", "").strip()
+    
+    try:
+        if port == 465:
+            server = smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30)
+        else:
+            server = smtplib.SMTP("smtp.gmail.com", 587, timeout=30)
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+        
+        server.login(gmail_user.strip(), clean_pwd)
+        server.send_message(msg)
+        server.quit()
+        return True, None
+    except Exception as e:
+        try:
+            server.quit()
+        except Exception:
+            pass
+        return False, str(e)
 
 
 def send_run_summary_email(gmail_user, gmail_app_password, recipient,
@@ -161,16 +187,28 @@ def send_run_summary_email(gmail_user, gmail_app_password, recipient,
     msg["Subject"] = f"{subject_emoji} Nifty50 Scan {timestamp} | {new_total} new, {today_total} today"
     msg["From"] = gmail_user
     msg["To"] = recipient
-    
     msg.attach(MIMEText(html_body, "html"))
     
-    try:
-        server = smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=15)
-        server.login(gmail_user, gmail_app_password.replace(" ", ""))
-        server.send_message(msg)
-        server.quit()
-        print(f"    ✓ Gmail summary sent to {recipient}")
-        return True
-    except Exception as e:
-        print(f"    ✗ Gmail FAILED: {e}")
-        return False
+    # Try port 587 (STARTTLS) first — more reliable on GitHub runners
+    # Fall back to 465 (SSL) if 587 fails
+    # Retry once on transient timeout errors
+    
+    attempts = [
+        ("port 587 STARTTLS, attempt 1", 587),
+        ("port 587 STARTTLS, attempt 2", 587),
+        ("port 465 SSL, fallback", 465),
+    ]
+    
+    last_error = None
+    for label, port in attempts:
+        print(f"    Trying Gmail {label}...")
+        success, err = _try_send_email(gmail_user, gmail_app_password, msg, port=port)
+        if success:
+            print(f"    ✓ Gmail summary sent to {recipient} via {label}")
+            return True
+        last_error = err
+        print(f"    ✗ {label} failed: {err}")
+        time.sleep(2)
+    
+    print(f"    ✗ Gmail FAILED after all retries. Last error: {last_error}")
+    return False
