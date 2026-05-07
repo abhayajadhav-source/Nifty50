@@ -24,6 +24,7 @@ from telegram_notifier import (
 
 IST = pytz.timezone("Asia/Kolkata")
 MOCK_MODE = os.getenv("MOCK_MODE", "false").lower() == "true"
+MANUAL_RUN = os.getenv("MANUAL_RUN", "false").lower() == "true"
 
 MORNING_END_IST = (10, 30)
 
@@ -73,7 +74,7 @@ def is_after_1300_ist():
 
 
 def main():
-    if not MOCK_MODE and not is_market_hours():
+    if not MOCK_MODE and not MANUAL_RUN and not is_market_hours():
         print("Outside IST market hours. Exiting.")
         return
 
@@ -104,7 +105,7 @@ def main():
     cpr_cache = {}
     pressure_state = {}
     daily_candles_cache = {}
-    last_summary_time = ""    # tracks last summary/heartbeat sent
+    last_summary_time = ""
 
     if os.path.exists(state_file):
         try:
@@ -146,7 +147,7 @@ def main():
     after_1030 = is_after_1030_ist()
     after_1300 = is_after_1300_ist()
 
-    print(f"Scanning {len(symbols)} stocks (mock={MOCK_MODE})")
+    print(f"Scanning {len(symbols)} stocks (mock={MOCK_MODE}, manual={MANUAL_RUN})")
     print(f"  Windows: in_or={in_or}, after_or={after_or}, after_930={after_930}, after_1000={after_1000}, after_1030={after_1030}, after_1300={after_1300}")
 
     error_count = 0
@@ -351,7 +352,6 @@ def main():
         "new_alerts_this_run": new_alerts,
     }
 
-    # Detailed summary at fixed times: 9:30, 11:30, 13:30, 15:30 IST
     summary_times = [9 * 60 + 30, 11 * 60 + 30, 13 * 60 + 30, 15 * 60 + 30]
     summary_label = None
     for stime in summary_times:
@@ -359,7 +359,6 @@ def main():
             summary_label = f"summary-{stime}"
             break
     
-    # Heartbeat at 10:30, 12:30, 14:30 IST (between detailed summaries)
     heartbeat_times = [10 * 60 + 30, 12 * 60 + 30, 14 * 60 + 30]
     heartbeat_label = None
     for htime in heartbeat_times:
@@ -367,7 +366,10 @@ def main():
             heartbeat_label = f"heartbeat-{htime}"
             break
     
-    if summary_label and last_summary_time != summary_label:
+    if MANUAL_RUN:
+        print("Manual run detected — sending summary regardless of schedule")
+        send_summary(tg_token, tg_chat, summary_data)
+    elif summary_label and last_summary_time != summary_label:
         send_summary(tg_token, tg_chat, summary_data)
         last_summary_time = summary_label
     elif heartbeat_label and last_summary_time != heartbeat_label:
@@ -379,7 +381,6 @@ def main():
         send_heartbeat(tg_token, tg_chat, heartbeat_data)
         last_summary_time = heartbeat_label
 
-    # Save state
     with open(state_file, "w") as f:
         json.dump({
             "date": today,
