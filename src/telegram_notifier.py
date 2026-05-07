@@ -161,7 +161,6 @@ def send_inside_candle_alert(bot_token, chat_id, signal):
     """Inside Candle Halt (Strategy 9 — Subasish Pani)."""
     emoji = "📦" if signal.direction == "BUY" else "📫"
     breakout_word = "above" if signal.direction == "BUY" else "below"
-    
     msg = f"""{emoji} {signal.name} — {signal.direction} setup (Inside Candle Halt)
 
 📊 Mother Candle (yesterday)
@@ -187,12 +186,11 @@ Target: ₹{signal.suggested_target} (1.5× risk)
 ⏱️ Hold: Intraday (close by 3:15 PM)
 
 ⚠️ Verify live price in Upstox before placing."""
-    
     return _send(bot_token, chat_id, msg, signal.name)
 
 
 def send_summary(bot_token, chat_id, summary_data):
-    """Periodic Telegram summary at key times."""
+    """Detailed periodic summary at 9:30, 11:30, 13:30, 15:30 IST."""
     total = summary_data.get("total_scanned", 0)
     errors = summary_data.get("errors", 0)
     success = total - errors
@@ -221,8 +219,10 @@ def send_summary(bot_token, chat_id, summary_data):
             alert_lines.append(f"  • {label}: {count}{new_marker}")
             total_alerts_today += count
 
-    if not alert_lines:
-        alert_lines.append("  • No alerts yet today")
+    if total_alerts_today == 0:
+        alerts_section = "✅ No setups triggered yet today.\nAll 7 strategies are scanning normally."
+    else:
+        alerts_section = f"📊 Today's Alerts ({total_alerts_today} total)\n" + "\n".join(alert_lines)
 
     msg = f"""📋 Scan Summary — {timestamp}
 
@@ -230,22 +230,44 @@ def send_summary(bot_token, chat_id, summary_data):
 Stocks scanned: {success}/{total}
 Errors: {errors}
 
-📊 Today's Alerts ({total_alerts_today} total)
-{chr(10).join(alert_lines)}
+{alerts_section}
 
 ⏱️ System running normally"""
 
     return _send(bot_token, chat_id, msg, "summary")
 
 
+def send_heartbeat(bot_token, chat_id, heartbeat_data):
+    """Lightweight 'still alive' message when no new alerts in last few hours."""
+    timestamp = heartbeat_data.get("timestamp", "")
+    total = heartbeat_data.get("total_scanned", 0)
+    total_alerts_today = heartbeat_data.get("total_alerts_today", 0)
+    
+    if total_alerts_today == 0:
+        status = "No setups today yet — quiet market or strategies waiting for trigger."
+    else:
+        status = f"{total_alerts_today} alert(s) sent earlier today. No new alerts in last hour."
+    
+    msg = f"""💚 Heartbeat — {timestamp}
+
+System scanning {total} stocks every 5 min.
+{status}
+
+Next periodic summary at next scheduled time (9:30/11:30/13:30/15:30 IST)."""
+    
+    return _send(bot_token, chat_id, msg, "heartbeat")
+
+
 def _send(bot_token, chat_id, msg, stock_name):
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     r = requests.post(url, json={"chat_id": chat_id, "text": msg})
     if r.status_code == 200:
-        if stock_name != "summary":
-            print(f"    ✓ Telegram alert sent for {stock_name}")
-        else:
+        if stock_name == "summary":
             print(f"    ✓ Telegram summary sent")
+        elif stock_name == "heartbeat":
+            print(f"    ✓ Telegram heartbeat sent")
+        else:
+            print(f"    ✓ Telegram alert sent for {stock_name}")
         return True
     else:
         print(f"    ✗ Telegram FAILED for {stock_name}")
