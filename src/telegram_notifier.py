@@ -1,7 +1,8 @@
 import requests
+from news_fetcher import format_news_for_telegram
 
 
-def send_gap_fill_alert(bot_token, chat_id, signal):
+def send_gap_fill_alert(bot_token, chat_id, signal, news_items=None):
     """Gap Fill Rejection (Strategy 3)."""
     emoji = "🔵" if signal.direction == "BUY" else "🟣"
     msg = f"""{emoji} {signal.name} — {signal.direction} setup (Gap Fill Rejection)
@@ -24,11 +25,11 @@ Target: ₹{signal.suggested_target}
 
 ⏱️ Hold: 30-90 min (mean reversion)
 
-⚠️ Verify live price in Upstox before placing."""
+⚠️ Verify live price in Upstox before placing.{format_news_for_telegram(news_items)}"""
     return _send(bot_token, chat_id, msg, signal.name)
 
 
-def send_orb_alert(bot_token, chat_id, signal):
+def send_orb_alert(bot_token, chat_id, signal, news_items=None):
     """ORB (Strategy 4)."""
     emoji = "⬆️" if signal.direction == "BUY" else "⬇️"
     msg = f"""{emoji} {signal.name} — {signal.direction} setup (Opening Range Breakout)
@@ -49,11 +50,11 @@ Target: ₹{signal.suggested_target} (measured move)
 
 ⏱️ Hold: 1-4 hours
 
-⚠️ Verify live price in Upstox before placing."""
+⚠️ Verify live price in Upstox before placing.{format_news_for_telegram(news_items)}"""
     return _send(bot_token, chat_id, msg, signal.name)
 
 
-def send_ma_trend_alert(bot_token, chat_id, signal):
+def send_ma_trend_alert(bot_token, chat_id, signal, news_items=None):
     """MA Trend (Strategy 5)."""
     emoji = "📈" if signal.direction == "BUY" else "📉"
     msg = f"""{emoji} {signal.name} — {signal.direction} setup (MA Trend Following)
@@ -73,11 +74,11 @@ Target: ₹{signal.suggested_target} (2× risk)
 
 ⏱️ Hold: 2-5 hours
 
-⚠️ Verify live price in Upstox before placing."""
+⚠️ Verify live price in Upstox before placing.{format_news_for_telegram(news_items)}"""
     return _send(bot_token, chat_id, msg, signal.name)
 
 
-def send_cprbo_alert(bot_token, chat_id, signal):
+def send_cprbo_alert(bot_token, chat_id, signal, news_items=None):
     """CPRBO (Strategy 6)."""
     emoji = "🎯"
     msg = f"""{emoji} {signal.name} — {signal.direction} setup (CPR Late Breakout)
@@ -100,11 +101,11 @@ Target: ₹{signal.suggested_target} (measured move)
 
 ⏱️ Hold: 1-3 hours
 
-⚠️ Verify live price in Upstox before placing."""
+⚠️ Verify live price in Upstox before placing.{format_news_for_telegram(news_items)}"""
     return _send(bot_token, chat_id, msg, signal.name)
 
 
-def send_supply_zone_alert(bot_token, chat_id, signal):
+def send_supply_zone_alert(bot_token, chat_id, signal, news_items=None):
     """Supply Zone Breakout (Strategy 7)."""
     emoji = "🔥"
     msg = f"""{emoji} {signal.name} — {signal.direction} setup (Supply Zone Breakout)
@@ -125,11 +126,11 @@ Target: ₹{signal.suggested_target} (2× risk)
 
 ⏱️ Hold: 1-3 days (positional)
 
-⚠️ Verify live price in Upstox before placing."""
+⚠️ Verify live price in Upstox before placing.{format_news_for_telegram(news_items)}"""
     return _send(bot_token, chat_id, msg, signal.name)
 
 
-def send_ppt_alert(bot_token, chat_id, signal):
+def send_ppt_alert(bot_token, chat_id, signal, news_items=None):
     """Pivot Pressure Trade (Strategy 8)."""
     emoji = "💥" if signal.direction == "BUY" else "💢"
     breakout_word = "above" if signal.direction == "BUY" else "below"
@@ -153,11 +154,11 @@ Target: ₹{signal.suggested_target} (next pivot)
 
 ⏱️ Hold: 1-3 hours
 
-⚠️ Verify live price in Upstox before placing."""
+⚠️ Verify live price in Upstox before placing.{format_news_for_telegram(news_items)}"""
     return _send(bot_token, chat_id, msg, signal.name)
 
 
-def send_inside_candle_alert(bot_token, chat_id, signal):
+def send_inside_candle_alert(bot_token, chat_id, signal, news_items=None):
     """Inside Candle Halt (Strategy 9 — Subasish Pani)."""
     emoji = "📦" if signal.direction == "BUY" else "📫"
     breakout_word = "above" if signal.direction == "BUY" else "below"
@@ -185,8 +186,22 @@ Target: ₹{signal.suggested_target} (1.5× risk)
 
 ⏱️ Hold: Intraday (close by 3:15 PM)
 
-⚠️ Verify live price in Upstox before placing."""
+⚠️ Verify live price in Upstox before placing.{format_news_for_telegram(news_items)}"""
     return _send(bot_token, chat_id, msg, signal.name)
+
+
+def send_gap_alert(bot_token, chat_id, stock_name, gap_pct, prev_close, open_price, current_price, news_items=None):
+    """Pre-market gap notification — purely informational, before strategy fires."""
+    direction = "GAP UP 🟢" if gap_pct > 0 else "GAP DOWN 🔴"
+    msg = f"""⚡ {stock_name} — {direction} ({abs(gap_pct):.2f}%)
+
+📈 Pre-market Move
+Yesterday close: ₹{prev_close}
+Today open: ₹{open_price}
+Current: ₹{current_price}
+
+This is informational only. No strategy triggered yet — watch for setup.{format_news_for_telegram(news_items)}"""
+    return _send(bot_token, chat_id, msg, stock_name)
 
 
 def send_summary(bot_token, chat_id, summary_data):
@@ -238,7 +253,7 @@ Errors: {errors}
 
 
 def send_heartbeat(bot_token, chat_id, heartbeat_data):
-    """Lightweight 'still alive' message when no new alerts in last few hours."""
+    """Lightweight 'still alive' message between summaries."""
     timestamp = heartbeat_data.get("timestamp", "")
     total = heartbeat_data.get("total_scanned", 0)
     total_alerts_today = heartbeat_data.get("total_alerts_today", 0)
