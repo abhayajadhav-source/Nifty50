@@ -19,7 +19,7 @@ from quote_fetcher import (
 from telegram_notifier import (
     send_gap_fill_alert, send_orb_alert, send_ma_trend_alert,
     send_cprbo_alert, send_supply_zone_alert, send_ppt_alert,
-    send_inside_candle_alert, send_summary,
+    send_inside_candle_alert, send_summary, send_heartbeat,
 )
 
 IST = pytz.timezone("Asia/Kolkata")
@@ -104,6 +104,7 @@ def main():
     cpr_cache = {}
     pressure_state = {}
     daily_candles_cache = {}
+    last_summary_time = ""    # tracks last summary/heartbeat sent
 
     if os.path.exists(state_file):
         try:
@@ -122,6 +123,7 @@ def main():
                     atr_cache = data.get("atr_cache", {})
                     cpr_cache = data.get("cpr_cache", {})
                     pressure_state = data.get("pressure_state", {})
+                    last_summary_time = data.get("last_summary_time", "")
         except Exception:
             pass
 
@@ -315,6 +317,69 @@ def main():
             err_msg = str(e)
             print(f"  {sym['name']}: ERROR - {err_msg}")
 
+    # === Notification logic ===
+    now = datetime.now(IST)
+    minutes = now.hour * 60 + now.minute
+    
+    total_alerts_today = (len(gapfill_alerted) + len(orb_alerted) + len(ma_trend_alerted) +
+                          len(cprbo_alerted) + len(supply_zone_alerted) + len(ppt_alerted) +
+                          len(inside_candle_alerted))
+    
+    new_alerts = {
+        "gapfill": len(gapfill_alerted) - initial_counts["gapfill"],
+        "orb": len(orb_alerted) - initial_counts["orb"],
+        "ma_trend": len(ma_trend_alerted) - initial_counts["ma_trend"],
+        "cprbo": len(cprbo_alerted) - initial_counts["cprbo"],
+        "supply_zone": len(supply_zone_alerted) - initial_counts["supply_zone"],
+        "ppt": len(ppt_alerted) - initial_counts["ppt"],
+        "inside_candle": len(inside_candle_alerted) - initial_counts["inside_candle"],
+    }
+
+    summary_data = {
+        "total_scanned": len(symbols),
+        "errors": error_count,
+        "timestamp": now.strftime("%H:%M IST"),
+        "alerts_today": {
+            "gapfill": list(gapfill_alerted),
+            "orb": list(orb_alerted),
+            "ma_trend": list(ma_trend_alerted),
+            "cprbo": list(cprbo_alerted),
+            "supply_zone": list(supply_zone_alerted),
+            "ppt": list(ppt_alerted),
+            "inside_candle": list(inside_candle_alerted),
+        },
+        "new_alerts_this_run": new_alerts,
+    }
+
+    # Detailed summary at fixed times: 9:30, 11:30, 13:30, 15:30 IST
+    summary_times = [9 * 60 + 30, 11 * 60 + 30, 13 * 60 + 30, 15 * 60 + 30]
+    summary_label = None
+    for stime in summary_times:
+        if stime <= minutes < stime + 5:
+            summary_label = f"summary-{stime}"
+            break
+    
+    # Heartbeat at 10:30, 12:30, 14:30 IST (between detailed summaries)
+    heartbeat_times = [10 * 60 + 30, 12 * 60 + 30, 14 * 60 + 30]
+    heartbeat_label = None
+    for htime in heartbeat_times:
+        if htime <= minutes < htime + 5:
+            heartbeat_label = f"heartbeat-{htime}"
+            break
+    
+    if summary_label and last_summary_time != summary_label:
+        send_summary(tg_token, tg_chat, summary_data)
+        last_summary_time = summary_label
+    elif heartbeat_label and last_summary_time != heartbeat_label:
+        heartbeat_data = {
+            "timestamp": now.strftime("%H:%M IST"),
+            "total_scanned": len(symbols),
+            "total_alerts_today": total_alerts_today,
+        }
+        send_heartbeat(tg_token, tg_chat, heartbeat_data)
+        last_summary_time = heartbeat_label
+
+    # Save state
     with open(state_file, "w") as f:
         json.dump({
             "date": today,
@@ -330,39 +395,8 @@ def main():
             "atr_cache": atr_cache,
             "cpr_cache": cpr_cache,
             "pressure_state": pressure_state,
+            "last_summary_time": last_summary_time,
         }, f)
-
-    new_alerts = {
-        "gapfill": len(gapfill_alerted) - initial_counts["gapfill"],
-        "orb": len(orb_alerted) - initial_counts["orb"],
-        "ma_trend": len(ma_trend_alerted) - initial_counts["ma_trend"],
-        "cprbo": len(cprbo_alerted) - initial_counts["cprbo"],
-        "supply_zone": len(supply_zone_alerted) - initial_counts["supply_zone"],
-        "ppt": len(ppt_alerted) - initial_counts["ppt"],
-        "inside_candle": len(inside_candle_alerted) - initial_counts["inside_candle"],
-    }
-
-    summary_data = {
-        "total_scanned": len(symbols),
-        "errors": error_count,
-        "timestamp": datetime.now(IST).strftime("%H:%M IST"),
-        "alerts_today": {
-            "gapfill": list(gapfill_alerted),
-            "orb": list(orb_alerted),
-            "ma_trend": list(ma_trend_alerted),
-            "cprbo": list(cprbo_alerted),
-            "supply_zone": list(supply_zone_alerted),
-            "ppt": list(ppt_alerted),
-            "inside_candle": list(inside_candle_alerted),
-        },
-        "new_alerts_this_run": new_alerts,
-    }
-
-    now = datetime.now(IST)
-    minutes = now.hour * 60 + now.minute
-    summary_times = [9 * 60 + 30, 11 * 60 + 30, 13 * 60 + 30, 15 * 60 + 30]
-    if any(stime <= minutes < stime + 5 for stime in summary_times):
-        send_summary(tg_token, tg_chat, summary_data)
 
     print("Done.")
 
