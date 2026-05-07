@@ -21,7 +21,6 @@ from telegram_notifier import (
     send_cprbo_alert, send_supply_zone_alert, send_ppt_alert,
     send_inside_candle_alert, send_summary,
 )
-from gmail_notifier import send_run_summary_email
 
 IST = pytz.timezone("Asia/Kolkata")
 MOCK_MODE = os.getenv("MOCK_MODE", "false").lower() == "true"
@@ -73,16 +72,6 @@ def is_after_1300_ist():
     return minutes >= 13 * 60
 
 
-def signal_to_dict(s):
-    return {
-        "name": getattr(s, "name", ""),
-        "direction": getattr(s, "direction", ""),
-        "entry": getattr(s, "suggested_entry", ""),
-        "stop_loss": getattr(s, "suggested_stop_loss", ""),
-        "target": getattr(s, "suggested_target", ""),
-    }
-
-
 def main():
     if not MOCK_MODE and not is_market_hours():
         print("Outside IST market hours. Exiting.")
@@ -91,9 +80,6 @@ def main():
     tg_token = os.environ["TELEGRAM_TOKEN"]
     tg_chat = os.environ["TELEGRAM_CHAT_ID"]
     upstox_token = os.environ.get("UPSTOX_ACCESS_TOKEN", "")
-    gmail_user = os.environ.get("GMAIL_USER", "")
-    gmail_pwd = os.environ.get("GMAIL_APP_PASSWORD", "")
-    gmail_recipient = os.environ.get("GMAIL_RECIPIENT", "")
 
     if not MOCK_MODE and not upstox_token:
         print("ERROR: UPSTOX_ACCESS_TOKEN missing")
@@ -149,16 +135,6 @@ def main():
         "inside_candle": len(inside_candle_alerted),
     }
 
-    new_alert_details = {
-        "gapfill": [],
-        "orb": [],
-        "ma_trend": [],
-        "cprbo": [],
-        "supply_zone": [],
-        "ppt": [],
-        "inside_candle": [],
-    }
-
     in_or = is_in_or_window()
     after_or = is_after_or_window()
     in_morning = is_in_morning_window()
@@ -170,10 +146,8 @@ def main():
 
     print(f"Scanning {len(symbols)} stocks (mock={MOCK_MODE})")
     print(f"  Windows: in_or={in_or}, after_or={after_or}, after_930={after_930}, after_1000={after_1000}, after_1030={after_1030}, after_1300={after_1300}")
-    print(f"  Gmail configured: user={bool(gmail_user)}, pwd={bool(gmail_pwd)}, recipient={bool(gmail_recipient)}")
 
     error_count = 0
-    errors = {}
 
     for sym in symbols:
         try:
@@ -243,7 +217,6 @@ def main():
                     print(f"  {sym['name']}: GAP FILL REJECTION {gfsignal.direction}")
                     if send_gap_fill_alert(tg_token, tg_chat, gfsignal):
                         gapfill_alerted.add(sym["name"])
-                        new_alert_details["gapfill"].append(signal_to_dict(gfsignal))
 
             if sym["name"] not in orb_alerted and atr and after_or:
                 or_data = or_levels.get(sym["name"], {})
@@ -259,7 +232,6 @@ def main():
                         print(f"  {sym['name']}: ORB {osignal.direction}")
                         if send_orb_alert(tg_token, tg_chat, osignal):
                             orb_alerted.add(sym["name"])
-                            new_alert_details["orb"].append(signal_to_dict(osignal))
 
             if sym["name"] not in ma_trend_alerted and after_1030:
                 if MOCK_MODE:
@@ -279,7 +251,6 @@ def main():
                         print(f"  {sym['name']}: MA TREND {msignal.direction}")
                         if send_ma_trend_alert(tg_token, tg_chat, msignal):
                             ma_trend_alerted.add(sym["name"])
-                            new_alert_details["ma_trend"].append(signal_to_dict(msignal))
 
             if sym["name"] not in cprbo_alerted and after_1300:
                 m_data = morning_levels.get(sym["name"], {})
@@ -295,7 +266,6 @@ def main():
                         print(f"  {sym['name']}: CPRBO {csignal.direction}")
                         if send_cprbo_alert(tg_token, tg_chat, csignal):
                             cprbo_alerted.add(sym["name"])
-                            new_alert_details["cprbo"].append(signal_to_dict(csignal))
 
             if sym["name"] not in supply_zone_alerted and after_1000 and daily_candles:
                 szsignal = analyze_supply_zone(
@@ -307,7 +277,6 @@ def main():
                     print(f"  {sym['name']}: SUPPLY ZONE BREAKOUT")
                     if send_supply_zone_alert(tg_token, tg_chat, szsignal):
                         supply_zone_alerted.add(sym["name"])
-                        new_alert_details["supply_zone"].append(signal_to_dict(szsignal))
 
             if sym["name"] not in ppt_alerted and yesterday_ohlc and atr:
                 pstate = pressure_state.get(sym["name"], {})
@@ -323,7 +292,6 @@ def main():
                     print(f"  {sym['name']}: PPT {pptsignal.direction}")
                     if send_ppt_alert(tg_token, tg_chat, pptsignal):
                         ppt_alerted.add(sym["name"])
-                        new_alert_details["ppt"].append(signal_to_dict(pptsignal))
 
             if sym["name"] not in inside_candle_alerted and after_930 and yesterday_ohlc and atr:
                 icsignal = analyze_inside_candle(
@@ -337,7 +305,6 @@ def main():
                     print(f"  {sym['name']}: INSIDE CANDLE {icsignal.direction}")
                     if send_inside_candle_alert(tg_token, tg_chat, icsignal):
                         inside_candle_alerted.add(sym["name"])
-                        new_alert_details["inside_candle"].append(signal_to_dict(icsignal))
 
             atr_str = f"₹{atr}" if atr else "n/a"
             print(f"  {sym['name']}: scanned (ltp=₹{q['ltp']}, atr={atr_str})")
@@ -346,7 +313,6 @@ def main():
         except Exception as e:
             error_count += 1
             err_msg = str(e)
-            errors[sym["name"]] = err_msg
             print(f"  {sym['name']}: ERROR - {err_msg}")
 
     with open(state_file, "w") as f:
@@ -397,19 +363,6 @@ def main():
     summary_times = [9 * 60 + 30, 11 * 60 + 30, 13 * 60 + 30, 15 * 60 + 30]
     if any(stime <= minutes < stime + 5 for stime in summary_times):
         send_summary(tg_token, tg_chat, summary_data)
-
-    if gmail_user and gmail_pwd and gmail_recipient:
-        run_data = {
-            "total_scanned": len(symbols),
-            "error_count": error_count,
-            "alerts_today": summary_data["alerts_today"],
-            "new_alerts_this_run": new_alerts,
-            "new_alert_details": new_alert_details,
-            "errors": errors,
-        }
-        send_run_summary_email(gmail_user, gmail_pwd, gmail_recipient, run_data)
-    else:
-        print("Gmail credentials not configured; skipping email summary")
 
     print("Done.")
 
