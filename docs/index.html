@@ -1,28 +1,436 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Nifty50 Strategy Monitor</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta http-equiv="refresh" content="60">
+<title>Nifty50 Strategy Monitor — 2026-05-08 11:37 IST</title>
 <style>
-body {
-    font-family: -apple-system, sans-serif;
-    text-align: center;
-    padding: 60px 20px;
-    background: #f5f7fa;
-    color: #1a202c;
+:root {
+    --bg: #f5f7fa;
+    --card-bg: #ffffff;
+    --text: #1a202c;
+    --text-muted: #718096;
+    --border: #e2e8f0;
+    --primary: #2563eb;
+    --primary-light: #dbeafe;
+    --positive: #059669;
+    --negative: #dc2626;
+    --buy-bg: #d1fae5;
+    --buy: #059669;
+    --sell-bg: #fee2e2;
+    --sell: #dc2626;
+    --shadow: 0 1px 3px rgba(0,0,0,0.05), 0 1px 2px rgba(0,0,0,0.03);
+    --shadow-md: 0 4px 6px rgba(0,0,0,0.07);
 }
-h1 { color: #2563eb; }
-.loading {
-    margin-top: 40px;
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #0f172a;
+        --card-bg: #1e293b;
+        --text: #f1f5f9;
+        --text-muted: #94a3b8;
+        --border: #334155;
+        --primary-light: #1e3a8a;
+        --buy-bg: #064e3b;
+        --sell-bg: #7f1d1d;
+    }
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    padding: 16px;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+header {
+    text-align: center;
+    margin-bottom: 24px;
+}
+
+header h1 {
+    margin: 0 0 4px 0;
+    font-size: 26px;
+    font-weight: 700;
+    background: linear-gradient(135deg, #2563eb, #7c3aed);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.timestamp {
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
+.live-indicator {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    background: #10b981;
+    border-radius: 50%;
+    animation: pulse 2s infinite;
+    margin-right: 6px;
+    vertical-align: middle;
+}
+
+@keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+    70% { box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+}
+
+.metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+}
+
+.metric {
+    background: var(--card-bg);
+    border-radius: 10px;
+    padding: 14px;
+    box-shadow: var(--shadow);
+    text-align: center;
+}
+
+.metric-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+}
+
+.metric-value {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--primary);
+    margin: 4px 0 0 0;
+}
+
+.metric-value.positive { color: var(--positive); }
+.metric-value.negative { color: var(--negative); }
+
+.section-title {
     font-size: 18px;
-    color: #718096;
+    font-weight: 600;
+    margin: 24px 0 12px 0;
+    color: var(--text);
+}
+
+.strategy-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 12px;
+}
+
+.strategy-card {
+    background: var(--card-bg);
+    border-radius: 12px;
+    padding: 16px;
+    box-shadow: var(--shadow);
+    border: 2px solid transparent;
+    transition: border-color 0.2s;
+}
+
+.strategy-card.active {
+    border-color: var(--primary);
+    box-shadow: var(--shadow-md);
+    background: linear-gradient(135deg, var(--card-bg) 0%, var(--primary-light) 100%);
+}
+
+.strategy-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.strategy-emoji {
+    font-size: 28px;
+}
+
+.strategy-info {
+    flex-grow: 1;
+}
+
+.strategy-info h3 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.source {
+    margin: 2px 0 0 0;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.strategy-count {
+    font-size: 30px;
+    font-weight: 700;
+    color: var(--primary);
+    min-width: 40px;
+    text-align: right;
+}
+
+.details-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    margin-top: 8px;
+}
+
+.details-table th {
+    text-align: left;
+    padding: 6px 4px;
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+}
+
+.details-table td {
+    padding: 8px 4px;
+    border-bottom: 1px solid var(--border);
+}
+
+.details-table tr:last-child td {
+    border-bottom: none;
+}
+
+.stock-name { font-weight: 600; }
+.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.dir-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+}
+
+.dir-badge.buy { background: var(--buy-bg); color: var(--buy); }
+.dir-badge.sell { background: var(--sell-bg); color: var(--sell); }
+
+.no-alerts {
+    color: var(--text-muted);
+    font-style: italic;
+    margin: 8px 0 0 0;
+    font-size: 12px;
+}
+
+.stocks-list {
+    color: var(--text-muted);
+    margin: 8px 0 0 0;
+    font-size: 12px;
+}
+
+.errors-section {
+    background: var(--card-bg);
+    border-radius: 12px;
+    padding: 16px;
+    box-shadow: var(--shadow);
+    margin-top: 24px;
+    border-left: 4px solid var(--negative);
+}
+
+.errors-section h2 {
+    margin: 0 0 12px 0;
+    font-size: 16px;
+    color: var(--negative);
+}
+
+.errors-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.errors-table td {
+    padding: 6px;
+    border-bottom: 1px solid var(--border);
+}
+
+.errors-table code {
+    color: var(--negative);
+    font-family: monospace;
+    font-size: 11px;
+}
+
+footer {
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 11px;
+    margin-top: 32px;
+    padding: 16px;
+    border-top: 1px solid var(--border);
+}
+
+footer a {
+    color: var(--primary);
+    text-decoration: none;
+}
+
+@media (max-width: 600px) {
+    body { padding: 12px 8px; }
+    header h1 { font-size: 22px; }
+    .strategy-grid { grid-template-columns: 1fr; }
+    .metric-value { font-size: 22px; }
 }
 </style>
 </head>
 <body>
-<h1>📊 Nifty50 Strategy Monitor</h1>
-<p class="loading">Dashboard initializing... waiting for first scan run.</p>
-<p class="loading">This page auto-refreshes every 60 seconds.</p>
+<div class="container">
+    <header>
+        <h1>Nifty50 Strategy Monitor</h1>
+        <div class="timestamp">
+            <span class="live-indicator"></span>
+            Last scan: 2026-05-08 11:37 IST • Auto-refreshes every 60s
+        </div>
+    </header>
+    
+    <div class="metrics">
+        <div class="metric">
+            <div class="metric-label">Stocks Scanned</div>
+            <div class="metric-value">49/50</div>
+        </div>
+        <div class="metric">
+            <div class="metric-label">Total Alerts Today</div>
+            <div class="metric-value positive">0</div>
+        </div>
+        <div class="metric">
+            <div class="metric-label">Errors</div>
+            <div class="metric-value negative">1</div>
+        </div>
+        <div class="metric">
+            <div class="metric-label">Strategies Active</div>
+            <div class="metric-value">7</div>
+        </div>
+    </div>
+    
+    <h2 class="section-title">📊 Today's Alerts by Strategy</h2>
+    <div class="strategy-grid">
+        
+        <div class="strategy-card ">
+            <div class="strategy-header">
+                <span class="strategy-emoji">🔵</span>
+                <div class="strategy-info">
+                    <h3>Gap Fill Rejection</h3>
+                    <p class="source">Vikram Prabhu</p>
+                </div>
+                <div class="strategy-count">0</div>
+            </div>
+            <p class='no-alerts'>No alerts yet today</p>
+        </div>
+        
+        <div class="strategy-card ">
+            <div class="strategy-header">
+                <span class="strategy-emoji">⬆️</span>
+                <div class="strategy-info">
+                    <h3>Opening Range Breakout</h3>
+                    <p class="source">Vikram Prabhu</p>
+                </div>
+                <div class="strategy-count">0</div>
+            </div>
+            <p class='no-alerts'>No alerts yet today</p>
+        </div>
+        
+        <div class="strategy-card ">
+            <div class="strategy-header">
+                <span class="strategy-emoji">📈</span>
+                <div class="strategy-info">
+                    <h3>MA Trend Following</h3>
+                    <p class="source">Vikram Prabhu</p>
+                </div>
+                <div class="strategy-count">0</div>
+            </div>
+            <p class='no-alerts'>No alerts yet today</p>
+        </div>
+        
+        <div class="strategy-card ">
+            <div class="strategy-header">
+                <span class="strategy-emoji">🎯</span>
+                <div class="strategy-info">
+                    <h3>CPR Late Breakout</h3>
+                    <p class="source">Vikram Prabhu</p>
+                </div>
+                <div class="strategy-count">0</div>
+            </div>
+            <p class='no-alerts'>No alerts yet today</p>
+        </div>
+        
+        <div class="strategy-card ">
+            <div class="strategy-header">
+                <span class="strategy-emoji">🔥</span>
+                <div class="strategy-info">
+                    <h3>Supply Zone Breakout</h3>
+                    <p class="source">Vikram Prabhu</p>
+                </div>
+                <div class="strategy-count">0</div>
+            </div>
+            <p class='no-alerts'>No alerts yet today</p>
+        </div>
+        
+        <div class="strategy-card ">
+            <div class="strategy-header">
+                <span class="strategy-emoji">💥</span>
+                <div class="strategy-info">
+                    <h3>Pivot Pressure Trade</h3>
+                    <p class="source">Vikram Prabhu</p>
+                </div>
+                <div class="strategy-count">0</div>
+            </div>
+            <p class='no-alerts'>No alerts yet today</p>
+        </div>
+        
+        <div class="strategy-card ">
+            <div class="strategy-header">
+                <span class="strategy-emoji">📦</span>
+                <div class="strategy-info">
+                    <h3>Inside Candle Halt</h3>
+                    <p class="source">Subasish Pani</p>
+                </div>
+                <div class="strategy-count">0</div>
+            </div>
+            <p class='no-alerts'>No alerts yet today</p>
+        </div>
+        
+    </div>
+    
+    
+        <div class="errors-section">
+            <h2>⚠️ Errors (1)</h2>
+            <table class="errors-table">
+                <thead><tr><th>Stock</th><th>Error</th></tr></thead>
+                <tbody><tr><td><strong>Kotak Bank</strong></td><td><code>Empty data for NSE_EQ|INE237A01028</code></td></tr></tbody>
+            </table>
+        </div>
+        
+    
+    <footer>
+        Nifty50 Strategy Monitor • Vikram Prabhu + Subasish Pani strategies<br>
+        Auto-generated by <a href="https://github.com/abhayajadhav-source/Nifty50">GitHub Actions</a><br>
+        Not investment advice. Verify all data before trading.
+    </footer>
+</div>
 </body>
 </html>
