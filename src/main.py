@@ -12,6 +12,7 @@ from ppt_detector import analyze_ppt, calculate_pivots, update_pressure_state
 from inside_candle_detector import analyze_inside_candle
 from atr_calculator import calculate_atr
 from news_fetcher import fetch_stock_news, is_significant_gap
+from dashboard_generator import generate_dashboard
 from quote_fetcher import (
     get_upstox_quote, get_upstox_daily_candles, get_upstox_intraday_candles,
     get_upstox_yesterday_ohlc, get_mock_quote, get_mock_candles,
@@ -74,6 +75,16 @@ def is_after_1300_ist():
     return minutes >= 13 * 60
 
 
+def signal_to_dict(s):
+    return {
+        "name": getattr(s, "name", ""),
+        "direction": getattr(s, "direction", ""),
+        "entry": getattr(s, "suggested_entry", ""),
+        "stop_loss": getattr(s, "suggested_stop_loss", ""),
+        "target": getattr(s, "suggested_target", ""),
+    }
+
+
 def main():
     if not MOCK_MODE and not MANUAL_RUN and not is_market_hours():
         print("Outside IST market hours. Exiting.")
@@ -88,9 +99,6 @@ def main():
         print("ERROR: UPSTOX_ACCESS_TOKEN missing")
         return
 
-    if not serper_key:
-        print("WARNING: SERPER_API_KEY missing — alerts will not include news context")
-
     with open("config/nifty50.json") as f:
         symbols = json.load(f)["symbols"]
 
@@ -104,15 +112,26 @@ def main():
     supply_zone_alerted = set()
     ppt_alerted = set()
     inside_candle_alerted = set()
-    gap_alerted = set()           # stocks notified about pre-market gap
+    gap_alerted = set()
     or_levels = {}
     morning_levels = {}
     atr_cache = {}
     cpr_cache = {}
     pressure_state = {}
     daily_candles_cache = {}
-    news_cache = {}                # caches news per stock per day to save API calls
+    news_cache = {}
     last_summary_time = ""
+    
+    # Track full alert details persistently for dashboard
+    alert_details = {
+        "gapfill": [],
+        "orb": [],
+        "ma_trend": [],
+        "cprbo": [],
+        "supply_zone": [],
+        "ppt": [],
+        "inside_candle": [],
+    }
 
     if os.path.exists(state_file):
         try:
@@ -134,6 +153,7 @@ def main():
                     pressure_state = data.get("pressure_state", {})
                     news_cache = data.get("news_cache", {})
                     last_summary_time = data.get("last_summary_time", "")
+                    alert_details = data.get("alert_details", alert_details)
         except Exception:
             pass
 
@@ -161,9 +181,9 @@ def main():
     print(f"  Serper API: {'configured' if serper_key else 'not configured'}")
 
     error_count = 0
+    errors = {}
 
     def get_news_for_stock(stock_name):
-        """Fetches news once per stock per day, caches result."""
         if stock_name in news_cache:
             return news_cache[stock_name]
         if not serper_key:
@@ -228,16 +248,14 @@ def main():
                 cur_pressure = pressure_state.get(sym["name"], {})
                 pressure_state[sym["name"]] = update_pressure_state(cur_pressure, q["ltp"], pivots)
 
-            # === Pre-market Gap Alert (informational, fired once per stock per day) ===
             if sym["name"] not in gap_alerted and in_morning and is_significant_gap(q["open"], q["prev_close"]):
                 gap_pct = ((q["open"] - q["prev_close"]) / q["prev_close"]) * 100
-                print(f"  {sym['name']}: SIGNIFICANT GAP {gap_pct:.2f}% (fetching news)")
+                print(f"  {sym['name']}: SIGNIFICANT GAP {gap_pct:.2f}%")
                 news = get_news_for_stock(sym["name"])
                 if send_gap_alert(tg_token, tg_chat, sym["name"], gap_pct,
                                    q["prev_close"], q["open"], q["ltp"], news_items=news):
                     gap_alerted.add(sym["name"])
 
-            # === Strategy 3: Gap Fill Rejection ===
             if sym["name"] not in gapfill_alerted and atr:
                 gfsignal = analyze_gap_fill(
                     symbol=sym["upstox"], name=sym["name"],
@@ -251,6 +269,7 @@ def main():
                     news = get_news_for_stock(sym["name"])
                     if send_gap_fill_alert(tg_token, tg_chat, gfsignal, news_items=news):
                         gapfill_alerted.add(sym["name"])
+                        alert_details["gapfill"].append(signal_to_dict(gfsignal))
 
             if sym["name"] not in orb_alerted and atr and after_or:
                 or_data = or_levels.get(sym["name"], {})
@@ -267,6 +286,7 @@ def main():
                         news = get_news_for_stock(sym["name"])
                         if send_orb_alert(tg_token, tg_chat, osignal, news_items=news):
                             orb_alerted.add(sym["name"])
+                            alert_details["orb"].append(signal_to_dict(osignal))
 
             if sym["name"] not in ma_trend_alerted and after_1030:
                 if MOCK_MODE:
@@ -287,6 +307,7 @@ def main():
                         news = get_news_for_stock(sym["name"])
                         if send_ma_trend_alert(tg_token, tg_chat, msignal, news_items=news):
                             ma_trend_alerted.add(sym["name"])
+                            alert_details["ma_trend"].append(signal_to_dict(msignal))
 
             if sym["name"] not in cprbo_alerted and after_1300:
                 m_data = morning_levels.get(sym["name"], {})
@@ -303,6 +324,7 @@ def main():
                         news = get_news_for_stock(sym["name"])
                         if send_cprbo_alert(tg_token, tg_chat, csignal, news_items=news):
                             cprbo_alerted.add(sym["name"])
+                            alert_details["cprbo"].append(signal_to_dict(csignal))
 
             if sym["name"] not in supply_zone_alerted and after_1000 and daily_candles:
                 szsignal = analyze_supply_zone(
@@ -315,6 +337,7 @@ def main():
                     news = get_news_for_stock(sym["name"])
                     if send_supply_zone_alert(tg_token, tg_chat, szsignal, news_items=news):
                         supply_zone_alerted.add(sym["name"])
+                        alert_details["supply_zone"].append(signal_to_dict(szsignal))
 
             if sym["name"] not in ppt_alerted and yesterday_ohlc and atr:
                 pstate = pressure_state.get(sym["name"], {})
@@ -331,6 +354,7 @@ def main():
                     news = get_news_for_stock(sym["name"])
                     if send_ppt_alert(tg_token, tg_chat, pptsignal, news_items=news):
                         ppt_alerted.add(sym["name"])
+                        alert_details["ppt"].append(signal_to_dict(pptsignal))
 
             if sym["name"] not in inside_candle_alerted and after_930 and yesterday_ohlc and atr:
                 icsignal = analyze_inside_candle(
@@ -345,6 +369,7 @@ def main():
                     news = get_news_for_stock(sym["name"])
                     if send_inside_candle_alert(tg_token, tg_chat, icsignal, news_items=news):
                         inside_candle_alerted.add(sym["name"])
+                        alert_details["inside_candle"].append(signal_to_dict(icsignal))
 
             atr_str = f"₹{atr}" if atr else "n/a"
             print(f"  {sym['name']}: scanned (ltp=₹{q['ltp']}, atr={atr_str})")
@@ -353,9 +378,9 @@ def main():
         except Exception as e:
             error_count += 1
             err_msg = str(e)
+            errors[sym["name"]] = err_msg
             print(f"  {sym['name']}: ERROR - {err_msg}")
 
-    # === Notification logic ===
     now = datetime.now(IST)
     minutes = now.hour * 60 + now.minute
     
@@ -418,6 +443,7 @@ def main():
         send_heartbeat(tg_token, tg_chat, heartbeat_data)
         last_summary_time = heartbeat_label
 
+    # Save state
     with open(state_file, "w") as f:
         json.dump({
             "date": today,
@@ -436,7 +462,19 @@ def main():
             "pressure_state": pressure_state,
             "news_cache": news_cache,
             "last_summary_time": last_summary_time,
+            "alert_details": alert_details,
         }, f)
+
+    # Generate dashboard HTML
+    dashboard_data = {
+        "total_scanned": len(symbols),
+        "error_count": error_count,
+        "alerts_today": summary_data["alerts_today"],
+        "alert_details": alert_details,
+        "errors": errors,
+    }
+    dashboard_path = generate_dashboard(dashboard_data, output_path="docs/index.html")
+    print(f"Dashboard generated at {dashboard_path}")
 
     print("Done.")
 
