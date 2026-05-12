@@ -10,18 +10,20 @@ from cprbo_detector import analyze_cprbo
 from supply_zone_detector import analyze_supply_zone
 from ppt_detector import analyze_ppt, calculate_pivots, update_pressure_state
 from inside_candle_detector import analyze_inside_candle
+from scalping_detector import analyze_scalping
 from atr_calculator import calculate_atr
 from news_fetcher import fetch_stock_news, is_significant_gap
 from dashboard_generator import generate_dashboard
 from quote_fetcher import (
     get_upstox_quote, get_upstox_daily_candles, get_upstox_intraday_candles,
     get_upstox_yesterday_ohlc, get_mock_quote, get_mock_candles,
-    get_mock_intraday_candles, get_mock_yesterday_ohlc,
+    get_mock_intraday_candles, get_mock_yesterday_ohlc, get_mock_5min_candles,
 )
 from telegram_notifier import (
     send_gap_fill_alert, send_orb_alert, send_ma_trend_alert,
     send_cprbo_alert, send_supply_zone_alert, send_ppt_alert,
-    send_inside_candle_alert, send_gap_alert, send_summary, send_heartbeat,
+    send_inside_candle_alert, send_scalping_alert, send_gap_alert,
+    send_summary, send_heartbeat,
 )
 
 IST = pytz.timezone("Asia/Kolkata")
@@ -112,6 +114,7 @@ def main():
     supply_zone_alerted = set()
     ppt_alerted = set()
     inside_candle_alerted = set()
+    scalping_alerted = set()
     gap_alerted = set()
     or_levels = {}
     morning_levels = {}
@@ -122,15 +125,9 @@ def main():
     news_cache = {}
     last_summary_time = ""
     
-    # Track full alert details persistently for dashboard
     alert_details = {
-        "gapfill": [],
-        "orb": [],
-        "ma_trend": [],
-        "cprbo": [],
-        "supply_zone": [],
-        "ppt": [],
-        "inside_candle": [],
+        "gapfill": [], "orb": [], "ma_trend": [], "cprbo": [],
+        "supply_zone": [], "ppt": [], "inside_candle": [], "scalping": [],
     }
 
     if os.path.exists(state_file):
@@ -145,6 +142,7 @@ def main():
                     supply_zone_alerted = set(data.get("supply_zone_alerted", []))
                     ppt_alerted = set(data.get("ppt_alerted", []))
                     inside_candle_alerted = set(data.get("inside_candle_alerted", []))
+                    scalping_alerted = set(data.get("scalping_alerted", []))
                     gap_alerted = set(data.get("gap_alerted", []))
                     or_levels = data.get("or_levels", {})
                     morning_levels = data.get("morning_levels", {})
@@ -158,13 +156,10 @@ def main():
             pass
 
     initial_counts = {
-        "gapfill": len(gapfill_alerted),
-        "orb": len(orb_alerted),
-        "ma_trend": len(ma_trend_alerted),
-        "cprbo": len(cprbo_alerted),
-        "supply_zone": len(supply_zone_alerted),
-        "ppt": len(ppt_alerted),
-        "inside_candle": len(inside_candle_alerted),
+        "gapfill": len(gapfill_alerted), "orb": len(orb_alerted),
+        "ma_trend": len(ma_trend_alerted), "cprbo": len(cprbo_alerted),
+        "supply_zone": len(supply_zone_alerted), "ppt": len(ppt_alerted),
+        "inside_candle": len(inside_candle_alerted), "scalping": len(scalping_alerted),
     }
 
     in_or = is_in_or_window()
@@ -371,6 +366,27 @@ def main():
                         inside_candle_alerted.add(sym["name"])
                         alert_details["inside_candle"].append(signal_to_dict(icsignal))
 
+            if sym["name"] not in scalping_alerted and after_930 and yesterday_ohlc:
+                if MOCK_MODE:
+                    candles_5min = get_mock_5min_candles(sym["name"])
+                else:
+                    try:
+                        candles_5min = get_upstox_intraday_candles(sym["upstox"], upstox_token, "5minute")
+                    except Exception:
+                        candles_5min = []
+                if candles_5min and len(candles_5min) >= 21:
+                    scsignal = analyze_scalping(
+                        symbol=sym["upstox"], name=sym["name"],
+                        intraday_5min_candles=candles_5min,
+                        yesterday_ohlc=yesterday_ohlc,
+                    )
+                    if scsignal:
+                        print(f"  {sym['name']}: SCALPING {scsignal.direction} ({scsignal.setup_location})")
+                        news = get_news_for_stock(sym["name"])
+                        if send_scalping_alert(tg_token, tg_chat, scsignal, news_items=news):
+                            scalping_alerted.add(sym["name"])
+                            alert_details["scalping"].append(signal_to_dict(scsignal))
+
             atr_str = f"₹{atr}" if atr else "n/a"
             print(f"  {sym['name']}: scanned (ltp=₹{q['ltp']}, atr={atr_str})")
 
@@ -386,7 +402,7 @@ def main():
     
     total_alerts_today = (len(gapfill_alerted) + len(orb_alerted) + len(ma_trend_alerted) +
                           len(cprbo_alerted) + len(supply_zone_alerted) + len(ppt_alerted) +
-                          len(inside_candle_alerted))
+                          len(inside_candle_alerted) + len(scalping_alerted))
     
     new_alerts = {
         "gapfill": len(gapfill_alerted) - initial_counts["gapfill"],
@@ -396,6 +412,7 @@ def main():
         "supply_zone": len(supply_zone_alerted) - initial_counts["supply_zone"],
         "ppt": len(ppt_alerted) - initial_counts["ppt"],
         "inside_candle": len(inside_candle_alerted) - initial_counts["inside_candle"],
+        "scalping": len(scalping_alerted) - initial_counts["scalping"],
     }
 
     summary_data = {
@@ -410,6 +427,7 @@ def main():
             "supply_zone": list(supply_zone_alerted),
             "ppt": list(ppt_alerted),
             "inside_candle": list(inside_candle_alerted),
+            "scalping": list(scalping_alerted),
         },
         "new_alerts_this_run": new_alerts,
     }
@@ -443,7 +461,6 @@ def main():
         send_heartbeat(tg_token, tg_chat, heartbeat_data)
         last_summary_time = heartbeat_label
 
-    # Save state
     with open(state_file, "w") as f:
         json.dump({
             "date": today,
@@ -454,6 +471,7 @@ def main():
             "supply_zone_alerted": list(supply_zone_alerted),
             "ppt_alerted": list(ppt_alerted),
             "inside_candle_alerted": list(inside_candle_alerted),
+            "scalping_alerted": list(scalping_alerted),
             "gap_alerted": list(gap_alerted),
             "or_levels": or_levels,
             "morning_levels": morning_levels,
@@ -465,7 +483,6 @@ def main():
             "alert_details": alert_details,
         }, f)
 
-    # Generate dashboard HTML
     dashboard_data = {
         "total_scanned": len(symbols),
         "error_count": error_count,
