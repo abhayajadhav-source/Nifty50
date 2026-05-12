@@ -195,3 +195,28 @@ def get_mock_yesterday_ohlc(name):
         "low": round(base - daily_range / 2, 2),
         "close": round(random.uniform(base - daily_range / 4, base + daily_range / 4), 2),
     }
+
+def get_mock_5min_candles(stock_name, num_candles=25):
+    """Mock 5-min candles for testing scalping strategy."""
+    import hashlib
+    seed = int(hashlib.md5(stock_name.encode()).hexdigest()[:8], 16)
+    
+    candles = []
+    base_price = 1000 + (seed % 2000)
+    
+    for i in range(num_candles):
+        variation = ((seed + i * 7) % 100) / 100 - 0.5
+        open_p = base_price * (1 + variation * 0.02)
+        high_p = open_p * (1 + abs(variation) * 0.005)
+        low_p = open_p * (1 - abs(variation) * 0.005)
+        close_p = open_p + (variation * 0.5)
+        
+        candles.append({
+            "open": round(open_p, 2),
+            "high": round(high_p, 2),
+            "low": round(low_p, 2),
+            "close": round(close_p, 2),
+            "volume": 100000 + (seed % 50000),
+        })
+    
+    return candles
