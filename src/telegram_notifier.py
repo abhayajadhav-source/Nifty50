@@ -190,8 +190,62 @@ Target: ₹{signal.suggested_target} (1.5× risk)
     return _send(bot_token, chat_id, msg, signal.name)
 
 
+def send_scalping_alert(bot_token, chat_id, signal, news_items=None):
+    """Scalping Strategy (Strategy 10 — PDH/PDL/CPR/EMA + Candle Pattern)."""
+    direction_emoji = "🎯" if signal.direction == "BUY" else "🔻"
+    
+    pattern_emoji = {
+        "bull_maru": "🟢", "bear_maru": "🔴",
+        "bull_pin": "🌟", "bear_pin": "⭐",
+    }.get(signal.candle_pattern, "🕯")
+    
+    pattern_label = {
+        "bull_maru": "Bullish Marubozu",
+        "bear_maru": "Bearish Marubozu",
+        "bull_pin": "Bullish Pin Bar",
+        "bear_pin": "Bearish Pin Bar",
+    }.get(signal.candle_pattern, signal.candle_pattern)
+    
+    setup_label = {
+        "pdh": "Previous Day High",
+        "pdl": "Previous Day Low",
+        "cpr_tc": "CPR Top Central",
+        "cpr_bc": "CPR Bottom Central",
+        "cpr_pivot": "CPR Pivot",
+        "ema20": "20 EMA Pullback",
+    }.get(signal.setup_location, signal.setup_location)
+    
+    msg = f"""{direction_emoji} {signal.name} — {signal.direction} scalp (5-min)
+
+📍 Setup Location: {setup_label}
+Level: ₹{signal.level_price}
+Trend: {signal.trend.upper()}
+
+{pattern_emoji} Candle Pattern: {pattern_label}
+Open: ₹{signal.candle_open} | Close: ₹{signal.candle_close}
+High: ₹{signal.candle_high} | Low: ₹{signal.candle_low}
+
+📊 Key Levels
+PDH: ₹{signal.pdh} | PDL: ₹{signal.pdl}
+CPR: TC ₹{signal.cpr_tc}, Pivot ₹{signal.cpr_pivot}, BC ₹{signal.cpr_bc}
+CPR Width: {signal.cpr_width_pct}% ({'wide' if signal.cpr_width_pct >= 0.5 else 'narrow'})
+
+🎯 Trade Plan
+Entry: ₹{signal.suggested_entry}
+Stop Loss: ₹{signal.suggested_stop_loss}
+Target: ₹{signal.suggested_target}
+R:R = 1:{signal.risk_reward}
+
+⏱️ Hold: 15-30 min (scalp — book fast!)
+Time stop: 30 min if not hit
+
+⚠️ Verify live price in Upstox before placing.{format_news_for_telegram(news_items)}"""
+    
+    return _send(bot_token, chat_id, msg, signal.name)
+
+
 def send_gap_alert(bot_token, chat_id, stock_name, gap_pct, prev_close, open_price, current_price, news_items=None):
-    """Pre-market gap notification — purely informational, before strategy fires."""
+    """Pre-market gap notification — purely informational."""
     direction = "GAP UP 🟢" if gap_pct > 0 else "GAP DOWN 🔴"
     msg = f"""⚡ {stock_name} — {direction} ({abs(gap_pct):.2f}%)
 
@@ -222,6 +276,7 @@ def send_summary(bot_token, chat_id, summary_data):
         "supply_zone": "Supply Zone Breakout",
         "ppt": "Pivot Pressure Trade",
         "inside_candle": "Inside Candle Halt",
+        "scalping": "Scalping (5-min)",
     }
 
     alert_lines = []
@@ -235,7 +290,7 @@ def send_summary(bot_token, chat_id, summary_data):
             total_alerts_today += count
 
     if total_alerts_today == 0:
-        alerts_section = "✅ No setups triggered yet today.\nAll 7 strategies are scanning normally."
+        alerts_section = "✅ No setups triggered yet today.\nAll 8 strategies are scanning normally."
     else:
         alerts_section = f"📊 Today's Alerts ({total_alerts_today} total)\n" + "\n".join(alert_lines)
 
