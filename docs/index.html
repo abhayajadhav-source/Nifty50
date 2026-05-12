@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta http-equiv="refresh" content="60">
-<title>Nifty50 Strategy Monitor — 2026-05-11 14:34 IST</title>
+<title>Nifty50 Strategy Monitor — 2026-05-12 08:26 IST</title>
 <style>
 :root {
     --bg: #f5f7fa;
@@ -49,15 +49,9 @@ body {
     padding: 16px;
 }
 
-.container {
-    max-width: 1200px;
-    margin: 0 auto;
-}
+.container { max-width: 1200px; margin: 0 auto; }
 
-header {
-    text-align: center;
-    margin-bottom: 24px;
-}
+header { text-align: center; margin-bottom: 24px; }
 
 header h1 {
     margin: 0 0 4px 0;
@@ -69,10 +63,7 @@ header h1 {
     background-clip: text;
 }
 
-.timestamp {
-    color: var(--text-muted);
-    font-size: 13px;
-}
+.timestamp { color: var(--text-muted); font-size: 13px; }
 
 .live-indicator {
     display: inline-block;
@@ -159,13 +150,9 @@ header h1 {
     margin-bottom: 12px;
 }
 
-.strategy-emoji {
-    font-size: 28px;
-}
+.strategy-emoji { font-size: 28px; }
 
-.strategy-info {
-    flex-grow: 1;
-}
+.strategy-info { flex-grow: 1; }
 
 .strategy-info h3 {
     margin: 0;
@@ -209,15 +196,10 @@ header h1 {
     border-bottom: 1px solid var(--border);
 }
 
-.details-table tr:last-child td {
-    border-bottom: none;
-}
+.details-table tr:last-child td { border-bottom: none; }
 
 .stock-name { font-weight: 600; }
-.num {
-    text-align: right;
-    font-variant-numeric: tabular-nums;
-}
+.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 .dir-badge {
     display: inline-block;
@@ -259,22 +241,9 @@ header h1 {
     color: var(--negative);
 }
 
-.errors-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 12px;
-}
-
-.errors-table td {
-    padding: 6px;
-    border-bottom: 1px solid var(--border);
-}
-
-.errors-table code {
-    color: var(--negative);
-    font-family: monospace;
-    font-size: 11px;
-}
+.errors-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.errors-table td { padding: 6px; border-bottom: 1px solid var(--border); }
+.errors-table code { color: var(--negative); font-family: monospace; font-size: 11px; }
 
 footer {
     text-align: center;
@@ -285,10 +254,7 @@ footer {
     border-top: 1px solid var(--border);
 }
 
-footer a {
-    color: var(--primary);
-    text-decoration: none;
-}
+footer a { color: var(--primary); text-decoration: none; }
 
 @media (max-width: 600px) {
     body { padding: 12px 8px; }
@@ -304,26 +270,26 @@ footer a {
         <h1>Nifty50 Strategy Monitor</h1>
         <div class="timestamp">
             <span class="live-indicator"></span>
-            Last scan: 2026-05-11 14:34 IST • Auto-refreshes every 60s
+            Last scan: 2026-05-12 08:26 IST • Auto-refreshes every 60s
         </div>
     </header>
     
     <div class="metrics">
         <div class="metric">
             <div class="metric-label">Stocks Scanned</div>
-            <div class="metric-value">49/50</div>
+            <div class="metric-value">50/50</div>
         </div>
         <div class="metric">
             <div class="metric-label">Total Alerts Today</div>
-            <div class="metric-value positive">14</div>
+            <div class="metric-value positive">0</div>
         </div>
         <div class="metric">
             <div class="metric-label">Errors</div>
-            <div class="metric-value negative">1</div>
+            <div class="metric-value ">0</div>
         </div>
         <div class="metric">
             <div class="metric-label">Strategies Active</div>
-            <div class="metric-value">7</div>
+            <div class="metric-value">8</div>
         </div>
     </div>
     
@@ -366,141 +332,16 @@ footer a {
             <p class='no-alerts'>No alerts yet today</p>
         </div>
         
-        <div class="strategy-card active">
+        <div class="strategy-card ">
             <div class="strategy-header">
                 <span class="strategy-emoji">🎯</span>
                 <div class="strategy-info">
                     <h3>CPR Late Breakout</h3>
                     <p class="source">Vikram Prabhu</p>
                 </div>
-                <div class="strategy-count">14</div>
+                <div class="strategy-count">0</div>
             </div>
-            
-            <table class="details-table">
-                <thead>
-                    <tr>
-                        <th>Stock</th>
-                        <th>Dir</th>
-                        <th>Entry</th>
-                        <th>SL</th>
-                        <th>Target</th>
-                    </tr>
-                </thead>
-                <tbody>
-                <tr>
-                    <td class="stock-name">TCS</td>
-                    <td><span class="dir-badge buy">BUY</span></td>
-                    <td class="num">₹2403.0</td>
-                    <td class="num">₹2395.79</td>
-                    <td class="num">₹2426.9</td>
-                </tr>
-                
-                <tr>
-                    <td class="stock-name">HUL</td>
-                    <td><span class="dir-badge buy">BUY</span></td>
-                    <td class="num">₹2305.2</td>
-                    <td class="num">₹2298.28</td>
-                    <td class="num">₹2323.1</td>
-                </tr>
-                
-                <tr>
-                    <td class="stock-name">Bajaj Finance</td>
-                    <td><span class="dir-badge sell">SELL</span></td>
-                    <td class="num">₹939.8</td>
-                    <td class="num">₹942.62</td>
-                    <td class="num">₹930.45</td>
-                </tr>
-                
-                <tr>
-                    <td class="stock-name">Mahindra</td>
-                    <td><span class="dir-badge buy">BUY</span></td>
-                    <td class="num">₹3279.1</td>
-                    <td class="num">₹3269.26</td>
-                    <td class="num">₹3331.2</td>
-                </tr>
-                
-                <tr>
-                    <td class="stock-name">NTPC</td>
-                    <td><span class="dir-badge sell">SELL</span></td>
-                    <td class="num">₹396.7</td>
-                    <td class="num">₹397.89</td>
-                    <td class="num">₹390.9</td>
-                </tr>
-                
-                <tr>
-                    <td class="stock-name">UltraTech Cement</td>
-                    <td><span class="dir-badge buy">BUY</span></td>
-                    <td class="num">₹11909.0</td>
-                    <td class="num">₹11873.27</td>
-                    <td class="num">₹12021.0</td>
-                </tr>
-                
-                <tr>
-                    <td class="stock-name">Tata Motors</td>
-                    <td><span class="dir-badge sell">SELL</span></td>
-                    <td class="num">₹348.0</td>
-                    <td class="num">₹349.04</td>
-                    <td class="num">₹344.25</td>
-                </tr>
-                
-                <tr>
-                    <td class="stock-name">Grasim</td>
-                    <td><span class="dir-badge buy">BUY</span></td>
-                    <td class="num">₹2998.2</td>
-                    <td class="num">₹2989.21</td>
-                    <td class="num">₹3021.1</td>
-                </tr>
-                
-                <tr>
-                    <td class="stock-name">SBI Life</td>
-                    <td><span class="dir-badge buy">BUY</span></td>
-                    <td class="num">₹1889.6</td>
-                    <td class="num">₹1883.93</td>
-                    <td class="num">₹1910.6</td>
-                </tr>
-                
-                <tr>
-                    <td class="stock-name">Cipla</td>
-                    <td><span class="dir-badge sell">SELL</span></td>
-                    <td class="num">₹1309.5</td>
-                    <td class="num">₹1313.43</td>
-                    <td class="num">₹1290.0</td>
-                </tr>
-                
-                <tr>
-                    <td class="stock-name">Hindalco</td>
-                    <td><span class="dir-badge sell">SELL</span></td>
-                    <td class="num">₹1028.6</td>
-                    <td class="num">₹1031.69</td>
-                    <td class="num">₹1016.3</td>
-                </tr>
-                
-                <tr>
-                    <td class="stock-name">Tata Consumer</td>
-                    <td><span class="dir-badge buy">BUY</span></td>
-                    <td class="num">₹1261.0</td>
-                    <td class="num">₹1257.22</td>
-                    <td class="num">₹1314.6</td>
-                </tr>
-                
-                <tr>
-                    <td class="stock-name">Divis Labs</td>
-                    <td><span class="dir-badge buy">BUY</span></td>
-                    <td class="num">₹6750.0</td>
-                    <td class="num">₹6729.75</td>
-                    <td class="num">₹6834.0</td>
-                </tr>
-                
-                <tr>
-                    <td class="stock-name">Hero MotoCorp</td>
-                    <td><span class="dir-badge buy">BUY</span></td>
-                    <td class="num">₹5279.0</td>
-                    <td class="num">₹5263.16</td>
-                    <td class="num">₹5372.0</td>
-                </tr>
-                </tbody>
-            </table>
-            
+            <p class='no-alerts'>No alerts yet today</p>
         </div>
         
         <div class="strategy-card ">
@@ -539,21 +380,25 @@ footer a {
             <p class='no-alerts'>No alerts yet today</p>
         </div>
         
+        <div class="strategy-card ">
+            <div class="strategy-header">
+                <span class="strategy-emoji">🎯</span>
+                <div class="strategy-info">
+                    <h3>Scalping (5-min)</h3>
+                    <p class="source">Price Action</p>
+                </div>
+                <div class="strategy-count">0</div>
+            </div>
+            <p class='no-alerts'>No alerts yet today</p>
+        </div>
+        
     </div>
     
     
-        <div class="errors-section">
-            <h2>⚠️ Errors (1)</h2>
-            <table class="errors-table">
-                <thead><tr><th>Stock</th><th>Error</th></tr></thead>
-                <tbody><tr><td><strong>Kotak Bank</strong></td><td><code>Empty data for NSE_EQ|INE237A01028</code></td></tr></tbody>
-            </table>
-        </div>
-        
     
     <footer>
-        Nifty50 Strategy Monitor • Vikram Prabhu + Subasish Pani strategies<br>
-        Auto-generated by <a href="https://github.com/abhayajadhav-source/Nifty50">GitHub Actions</a><br>
+        Nifty50 Strategy Monitor • Vikram Prabhu + Subasish Pani + Price Action strategies<br>
+        Auto-generated by GitHub Actions / DigitalOcean<br>
         Not investment advice. Verify all data before trading.
     </footer>
 </div>
